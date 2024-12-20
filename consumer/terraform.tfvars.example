@@ -1,0 +1,3 @@
+project_id                 = ""
+mgmt_allow_ips             = ["0.0.0.0/0"]
+region                     = "us-west1"

@@ -1,0 +1,21 @@
+# ------------------------------------------------
+# Required
+# ------------------------------------------------
+
+project_id      = ""
+mgmt_allow_ips  = ["0.0.0.0/0"]
+region          = "us-west1"
+
+# ------------------------------------------------
+# Optional
+# ------------------------------------------------
+
+subnet_cidr_mgmt = "10.0.0.0/28"
+subnet_cidr_data = "10.0.1.0/28"
+image_name       = "vmseries-flex-bundle2-1114h7"
+prefix           = null
+csp_authcodes    = ""
+csp_pin_id       = ""
+csp_pin_value    = ""
+max_firewalls    = 1
+min_firewalls    = 1
