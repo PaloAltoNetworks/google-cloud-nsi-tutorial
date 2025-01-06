@@ -384,7 +384,8 @@ Create a network firewall policy with mirroring rules.  Create security profile 
         --layer4-configs all \
         --src-ip-ranges 0.0.0.0/0 \
         --dest-ip-ranges 0.0.0.0/0 \
-        --direction INGRESS
+        --direction INGRESS \
+        --project $CONSUMER_PROJECT
 
     gcloud beta compute network-firewall-policies mirroring-rules create <b><i>11</i></b> \
         --action mirror \
@@ -394,7 +395,8 @@ Create a network firewall policy with mirroring rules.  Create security profile 
         --layer4-configs all \
         --src-ip-ranges 0.0.0.0/0 \
         --dest-ip-ranges 0.0.0.0/0 \
-        --direction EGRESS</code></pre>
+        --direction EGRESS
+        --project $CONSUMER_PROJECT</code></pre>
 
 5. Associate the network firewall policy to the consumer VPC network.
 
