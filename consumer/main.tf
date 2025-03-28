@@ -123,8 +123,6 @@ data "google_compute_zones" "available" {
   region = var.region
 }
 
-data "google_compute_zones" "main" {}
-
 resource "google_compute_instance" "client" {
   name                      = "${local.prefix}client-vm"
   machine_type              = "f1-micro"
@@ -141,7 +139,6 @@ resource "google_compute_instance" "client" {
   network_interface {
     subnetwork = google_compute_subnetwork.main.id
     network_ip = cidrhost(var.subnet_cidr, 10)
-    access_config {}
   }
 
   metadata = {
@@ -181,7 +178,6 @@ resource "google_compute_instance" "web" {
   network_interface {
     subnetwork = google_compute_subnetwork.main.id
     network_ip = cidrhost(var.subnet_cidr, 20)
-    access_config {}
   }
 
   metadata = {
@@ -221,20 +217,20 @@ resource "google_compute_instance" "web" {
 
 module "gke" {
   source = "terraform-google-modules/kubernetes-engine/google"
-  #version                    = "~> 28.0"
+  version                    = "36.1.0"
   project_id                  = var.project_id
   name                        = "${local.prefix}cluster1"
-  regional                    = true
+  regional                    = false
   region                      = var.region
+  zones                       = ["${data.google_compute_zones.available.names[0]}"]
   network                     = google_compute_network.main.name
   subnetwork                  = google_compute_subnetwork.main.name
   ip_range_pods               = google_compute_subnetwork.main.secondary_ip_range[0].range_name
   ip_range_services           = google_compute_subnetwork.main.secondary_ip_range[1].range_name
   release_channel             = "UNSPECIFIED"
-  kubernetes_version          = local.gke_version
   create_service_account      = true
   http_load_balancing         = true
-  network_policy              = true
+  network_policy              = false
   horizontal_pod_autoscaling  = false
   deletion_protection         = false
   enable_intranode_visibility = true # Must be enabled for pod-to-pod traffic mirroring to SW-NGFW.
@@ -251,12 +247,12 @@ module "gke" {
   node_pools_oauth_scopes = {
     all = []
     default-node-pool = [
-      "https://www.googleapis.com/auth/cloud-platform",
+      "https://www.googleapis.com/auth/cloud-platform"
     ]
   }
 }
 
 data "google_container_cluster" "main" {
   name     = module.gke.name
-  location = var.region
+  location = data.google_compute_zones.available.names[0]
 }

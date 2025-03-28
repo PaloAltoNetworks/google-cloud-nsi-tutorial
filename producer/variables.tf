@@ -19,6 +19,12 @@ variable "mgmt_allow_ips" {
   type        = list(string)
 }
 
+variable "mgmt_public_ip" {
+  description = "If true, a public IP will be set on the management interface."
+  type        = bool
+  default     = false
+}
+
 variable "prefix" {
   description = "An optional name to prepend to each created resource."
   default     = null

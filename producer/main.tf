@@ -32,15 +32,14 @@ provider "google-beta" {
   }
 }
 
+
 # -------------------------------------------------------------------------------------
 # Localized variables
 # -------------------------------------------------------------------------------------
 
 locals {
-  prefix    = var.prefix != null && var.prefix != "" ? "${var.prefix}-" : ""
-  image_url = "https://www.googleapis.com/compute/v1/projects/paloaltonetworksgcp-public/global/images/${var.image_name}"
+  prefix = var.prefix != null && var.prefix != "" ? "${var.prefix}-" : ""
 }
-
 
 
 # -------------------------------------------------------------------------------------
@@ -98,18 +97,42 @@ resource "google_compute_firewall" "data" {
     ports    = []
   }
 }
+
+# -------------------------------------------------------------------------------------
+#  Create Cloud NAT for management VPC.
+# -------------------------------------------------------------------------------------
+
+// Create cloud router for cloud NAT.
+resource "google_compute_router" "main" {
+  name    = "${local.prefix}${var.region}mgmt-router"
+  network = google_compute_network.mgmt.id
+  region  = var.region
+}
+
+// Create cloud NAT for outbound internet access.
+resource "google_compute_router_nat" "main" {
+  name                               = "${local.prefix}mgmt-nat"
+  router                             = google_compute_router.main.name
+  region                             = var.region
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+}
+
+
 # -------------------------------------------------------------------------------------
 #  Create internal load balancer.
 # -------------------------------------------------------------------------------------
 
+// Create health check
 resource "google_compute_region_health_check" "main" {
   name = "${local.prefix}panw-hc"
-  http_health_check {
-    port         = 80
+  https_health_check {
+    port         = 443
     request_path = "/unauth/php/health.php"
   }
 }
 
+// Create backend service.
 resource "google_compute_region_backend_service" "main" {
   name          = "${local.prefix}panw-lb"
   protocol      = "UDP"
@@ -123,53 +146,21 @@ resource "google_compute_region_backend_service" "main" {
 }
 
 
-
-# -------------------------------------------------------------------------------------
-#  Create a mirroring deployment group with mirroring deployments and forwarding rules 
-#  for every zone in var.region.
-# -------------------------------------------------------------------------------------
-
-resource "google_network_security_mirroring_deployment_group" "main" {
-  provider                      = google-beta
-  mirroring_deployment_group_id = "${local.prefix}panw-mdg"
-  location                      = "global"
-  network                       = google_compute_network.data.id
-}
-
-data "google_compute_zones" "available" {
-  region = var.region
-}
-
-resource "google_compute_forwarding_rule" "zone" {
-  for_each               = toset(data.google_compute_zones.available.names)
-  name                   = "${local.prefix}panw-lb-rule-${each.key}"
-  subnetwork             = google_compute_subnetwork.data.id
-  backend_service        = google_compute_region_backend_service.main.self_link
-  load_balancing_scheme  = "INTERNAL"
-  ip_protocol            = "UDP"
-  ports                  = [6081]
-  is_mirroring_collector = true
-}
-
-resource "google_network_security_mirroring_deployment" "zone" {
-  for_each = toset(data.google_compute_zones.available.names)
-  provider                   = google-beta
-  mirroring_deployment_id    = "${local.prefix}panw-md-${each.key}"
-  location                   = each.value
-  forwarding_rule            = google_compute_forwarding_rule.zone[each.key].id
-  mirroring_deployment_group = google_network_security_mirroring_deployment_group.main.id
-}
-
-
-
 # -------------------------------------------------------------------------------------
 #  Create firewall service account, instance template, MIG, and autoscaler.
 # -------------------------------------------------------------------------------------
 
+// Retrieve zones within the region.
+data "google_compute_zones" "available" {
+  region = var.region
+}
+
+// Create service account for firewall
 resource "google_service_account" "main" {
   account_id = "${local.prefix}panw-sa"
 }
 
+// Add roles to service account
 resource "google_project_iam_member" "main" {
   for_each = var.roles
   project  = var.project_id
@@ -177,6 +168,23 @@ resource "google_project_iam_member" "main" {
   member   = "serviceAccount:${google_service_account.main.email}"
 }
 
+// Create bootstrap bucket download dynamic content to firewall
+module "bootstrap" {
+  source          = "PaloAltoNetworks/swfw-modules/google//modules/bootstrap"
+  version         = "~> 2.0"
+  location        = "US"
+  service_account = google_service_account.main.email
+
+  files = {
+    "bootstrap_files/init-cfg.txt"                       = "config/init-cfg.txt"
+    "bootstrap_files/authcodes"                          = "license/authcodes"
+    "bootstrap_files/panup-all-antivirus-5120-5639"      = "content/panup-all-antivirus-5120-5639"
+    "bootstrap_files/panupv2-all-contents-8952-9326"     = "content/panupv2-all-contents-8952-9326"
+    "bootstrap_files/panupv3-all-wildfire-959874-963830" = "content/panupv3-all-wildfire-959874-963830"
+  }
+}
+
+// Create instance template for the firewall
 resource "google_compute_instance_template" "main" {
   name_prefix      = "${local.prefix}panw-template"
   machine_type     = var.machine_type
@@ -198,16 +206,19 @@ resource "google_compute_instance_template" "main" {
 
   network_interface {
     subnetwork = google_compute_subnetwork.mgmt.id
-    access_config {}
+    dynamic "access_config" {
+      for_each = var.mgmt_public_ip ? [1] : []
+      content {}
+    }
   }
 
   network_interface {
     subnetwork = google_compute_subnetwork.data.id
-    
+
   }
 
   disk {
-    source_image = local.image_url
+    source_image = "https://www.googleapis.com/compute/v1/projects/paloaltonetworksgcp-public/global/images/${var.image_name}"
     disk_type    = "pd-ssd"
     auto_delete  = true
     boot         = true
@@ -227,9 +238,15 @@ resource "google_compute_instance_template" "main" {
       "https://www.googleapis.com/auth/monitoring.write",
     ]
   }
+
+  depends_on = [
+    module.bootstrap,
+    google_compute_router_nat.main
+  ]
 }
 
 
+// Create regional instance group
 resource "google_compute_region_instance_group_manager" "main" {
   name                      = "${local.prefix}panw-mig"
   base_instance_name        = "${local.prefix}panw-firewall"
@@ -241,6 +258,7 @@ resource "google_compute_region_instance_group_manager" "main" {
 }
 
 
+// Configure autoscaling policy for instance group
 resource "google_compute_region_autoscaler" "main" {
   name   = "${local.prefix}panw-autoscaler"
   target = google_compute_region_instance_group_manager.main.id
@@ -253,28 +271,3 @@ resource "google_compute_region_autoscaler" "main" {
 }
 
 
-
-
-
-module "iam_service_account" {
-  source             = "PaloAltoNetworks/swfw-modules/google//modules/iam_service_account"
-  version            = "~> 2.0"
-  service_account_id = "${local.prefix}vmseries-mig-sa"
-  project_id         = var.project_id
-}
-
-
-// Create the GCS bootstrap bucket with local firewall config (bootstrap.xml).
-module "bootstrap" {
-  source          = "PaloAltoNetworks/swfw-modules/google//modules/bootstrap"
-  version         = "~> 2.0"
-  service_account = module.iam_service_account.email
-  location        = "US"
-
-  // If panorama_ip is provided, skip uploading the local firewall config (bootstrap.xml) to GCS bootstrap bucket.
-  files = {
-    "bootstrap_files/bootstrap.xml" = "config/bootstrap.xml"
-    "bootstrap_files/init-cfg.txt"  = "config/init-cfg.txt"
-    "bootstrap_files/authcodes"     = "license/authcodes"
-  }
-}

