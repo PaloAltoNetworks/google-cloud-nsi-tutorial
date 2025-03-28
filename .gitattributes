@@ -1,0 +1,1 @@
+producer/bootstrap_files/* filter=lfs diff=lfs merge=lfs -text
