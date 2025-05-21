@@ -193,15 +193,20 @@ In the `producer` directory, use the terraform plan to create the producer's VPC
     | :---- | :---- | :---- |
     | `project_id` | The Google Cloud project ID of the producer environment. | `null` |
     | `mgmt_allow_ips` | A list of IPv4 addresses which have access to the firewall's mgmt interface. | `["0.0.0.0/0"]` |
-    | `mgmt_public_ip` | If true, the management address will have a public IP assigned to it. | `false` | 
+    | `mgmt_public_ip` | If true, the management address will have a public IP assigned to it. | `true` | 
     | `region` | The region to deploy the consumer resources. | `us-west1` |
-    | `image_name` | The firewall image to deploy. | `vmseries-flex-bundle2-1114h13`|
+    | `image_name` | The firewall image to deploy. | `vmseries-flex-bundle2-1126`|
+
+
+> [!CAUTION]
+> It is recommended to set `mgmt_public_ip` to `false` in production environments.
 
 > [!TIP]
 > For `image_name`, a full list of public images can be found with this command:
 > ```
 > gcloud compute images list --project paloaltonetworksgcp-public --no-standard-images
 > ```
+> All NSI deployments require PAN-OS 11.2.x or greater.
 
 > [!NOTE]
 > If you are using BYOL image (i.e.  <code>vmseries-flex-<b>byol</b>-*</code>), the license can be applied during or after deployment.  To license during deployment, add your authcode to `bootstrap_files/authcodes`.  See [Bootstrap Methods](https://docs.paloaltonetworks.com/vm-series/11-1/vm-series-deployment/bootstrap-the-vm-series-firewall) for more information.  
@@ -227,6 +232,10 @@ In the `producer` directory, use the terraform plan to create the producer's VPC
     export <b>BACKEND_SERVICE</b>=<i>https://www.googleapis.com/compute/v1/projects/your-project-id/regions/us-west1/backendServices/panw-lb</i></pre>
 
 7. **Copy-and-paste** the `ENVIRONMENT_VARIABLES` output into Cloud Shell to set environment variables.
+
+> [!IMPORTANT] 
+> The `init-cfg.txt` includes `plugin-op-commands=geneve-inspect:enable` bootstrap parameter, allowing firewalls to handle GENEVE encapsulated traffic forwarded via packet intercept. 
+> If this is not configured, packet intercept traffic will be dropped. 
 
 <br>
 
@@ -302,27 +311,6 @@ Access the firewall's CLI and enable Geneve encapsulation.  Then, apply a baseli
 
 > [!WARNING]
 > After applying the terraform plan, it can take ~10 minutes for the firewall to become available. 
-
-<br>
-
-#### Enable Geneve
-
-1. Enable the firewall to process Geneve encapsulated traffic.
-
-    ```
-    request plugins vm_series gcp ips inspect enable yes
-    ```
-
-2. Reboot the firewall. 
-
-    ```
-    request restart system
-    ```
-
-3. Enter `y` to reboot.
-
-> [!IMPORTANT]
-> The reboot will not be required in a future release.
 
 <br>
 
