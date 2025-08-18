@@ -132,7 +132,7 @@ resource "google_compute_instance" "client" {
   tags             = ["client-vm"]
   boot_disk {
     initialize_params {
-      image = "ubuntu-os-cloud/ubuntu-2004-lts"
+      image = "ubuntu-os-cloud/ubuntu-2204-lts"
     }
   }
 
@@ -171,7 +171,7 @@ resource "google_compute_instance" "web" {
 
   boot_disk {
     initialize_params {
-      image = "ubuntu-os-cloud/ubuntu-2004-lts"
+      image = "ubuntu-os-cloud/ubuntu-2204-lts"
     }
   }
 
