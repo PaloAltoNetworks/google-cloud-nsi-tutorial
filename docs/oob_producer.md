@@ -52,7 +52,7 @@ Create an mirroring deployment for the zone you wish to inspect traffic (`$ZONE`
 1. Delete the mirroring deployment, forwarding rule, and mirroring deployment group. 
 
     ```
-    gcloud beta network-security mirroring-deployments delete panw-deployment-$ZONE \
+    gcloud network-security mirroring-deployments delete panw-deployment-$ZONE \
         --location $ZONE \
         --no-async
 
@@ -61,7 +61,7 @@ Create an mirroring deployment for the zone you wish to inspect traffic (`$ZONE`
         --region $REGION \
         --quiet
 
-    gcloud beta network-security mirroring-deployment-groups delete panw-dg \
+    gcloud network-security mirroring-deployment-groups delete panw-dg \
         --location global \
         --project $PRODUCER_PROJECT \
         --no-async

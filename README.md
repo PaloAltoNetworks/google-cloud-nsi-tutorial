@@ -1,18 +1,18 @@
 # Software NGFW with Network Security Integration
 
-This tutorial shows how to deploy Palo Alto Networks Software Firewalls in Google Cloud, utilizing either the *in-line* or *out-of-band* deployment model within the [Network Security Integration](https://cloud.google.com/network-security-integration/docs/nsi-overview) (NSI).  NSI enables you to gain  visibility and security for your VPC network traffic, without requiring any changes to your network infrastructure.  
+This tutorial shows how to deploy Palo Alto Networks Software Firewalls in Google Cloud, utilizing either the *[in-band](https://docs.cloud.google.com/network-security-integration/docs/in-band/in-band-integration-overview)* or *[out-of-band](https://docs.cloud.google.com/network-security-integration/docs/out-of-band/out-of-band-integration-overview)* deployment model within the [Network Security Integration]([https://cloud.google.com/network-security-integration/docs/nsi-overview](https://docs.cloud.google.com/network-security-integration/docs/nsi-overview) (NSI).  NSI enables you to gain  visibility and security for your VPC network traffic, without requiring any changes to your network infrastructure.  
 
 The functionality of each model is summarized as follows:
 
 | Model           | Description             |
 | --------------- | ----------------------- |
 | **Out-of-Band** | Uses packet mirroring to forward a copy of network traffic to Software Firewalls for *out-of-band* inspection. Traffic is mirrored to your software firewalls by creating mirroring rules within your network firewall policy. |
-| **In-line**     | Uses packet intercept to steer network traffic to Software Firewalls for *in-line* inspection. Traffic is steered to your software firewalls by creating firewall rules within your network firewall policy. |
+| **In-Band**     | Uses packet intercept to steer network traffic to Software Firewalls for *in-line* inspection. Traffic is steered to your software firewalls by creating firewall rules within your network firewall policy. |
 
 This tutorial is intended for network administrators, solution architects, and security professionals who are familiar with [Compute Engine](https://cloud.google.com/compute) and [Virtual Private Cloud (VPC) networking](https://cloud.google.com/vpc).
 
 > [!CAUTION] 
-> This guide uses the *in-line* model, which is in private preview and must be enabled for your Google account. If you require passive inspection, steps for the *out-of-band* model are included where necessary. 
+> This guide uses the *in-band* model, which is in private preview and must be enabled for your Google account. If you require passive inspection, steps for the *out-of-band* model are included where necessary. 
 
 <br>
 
@@ -154,7 +154,7 @@ The network firewall policy associated with the `consumer-vpc` contains two rule
 ## Requirements
 
 > [!WARNING] 
-> The *in-line* model is currently in private preview and must be enabled for your Google Cloud account. 
+> The *in-band* model is currently in private preview and must be enabled for your Google Cloud account. 
 
 1. A Google Cloud project.
 2. Access to [Cloud Shell](https://shell.cloud.google.com). 
@@ -248,7 +248,7 @@ Create an intercept deployment for the zone you wish to inspect traffic (`$ZONE`
 2. Create an intercept deployment group (`panw-dg`) within the firewall’s `data-vpc`.
 
     ```
-    gcloud beta network-security intercept-deployment-groups create panw-dg \
+    gcloud network-security intercept-deployment-groups create panw-dg \
         --location global \
         --project $PRODUCER_PROJECT \
         --network $DATA_VPC \
@@ -271,7 +271,7 @@ Create an intercept deployment for the zone you wish to inspect traffic (`$ZONE`
 4. Create an intercept deployment (`panw-deployment-$ZONE`) by associating it with your forwarding rule.
 
     ```
-    gcloud beta network-security intercept-deployments create panw-deployment-$ZONE \
+    gcloud network-security intercept-deployments create panw-deployment-$ZONE \
         --location $ZONE \
         --forwarding-rule panw-lb-rule-$ZONE \
         --forwarding-rule-location $REGION \
@@ -532,7 +532,7 @@ Create an intercept *endpoint* and *endpoint group* and associate it with the pr
 2. Create an intercept endpoint group (`pan-epg`) referencing the producer's deployment group (`pan-dg`).
 
     ```
-    gcloud beta network-security intercept-endpoint-groups create panw-epg \
+    gcloud network-security intercept-endpoint-groups create panw-epg \
         --intercept-deployment-group panw-dg \
         --project $CONSUMER_PROJECT \
         --location global \
@@ -542,7 +542,7 @@ Create an intercept *endpoint* and *endpoint group* and associate it with the pr
 3. Associate the intercept endpoint group with your consumer’s VPC network.
 
     ```
-    gcloud beta network-security intercept-endpoint-group-associations create panw-epg-assoc \
+    gcloud network-security intercept-endpoint-group-associations create panw-epg-assoc \
         --intercept-endpoint-group panw-epg \
         --network $CONSUMER_VPC \
         --project $CONSUMER_PROJECT \
@@ -559,17 +559,17 @@ Create a `custom-intercept` security profile group, configure a network firewall
 1. Create `custom-intercept` security profile (`pan-sp`) referencing the intercept endpoint group (`panw-epg`).  
 
     ```
-    gcloud beta network-security security-profiles custom-intercept create panw-sp \
-        --intercept-endpoint-group panw-epg \
-        --billing-project $CONSUMER_PROJECT \
-        --organization $ORG_ID \
-        --location global
+gcloud network-security security-profiles custom-intercept create panw-sp \
+    --intercept-endpoint-group panw-epg \
+    --billing-project $CONSUMER_PROJECT \
+    --organization $ORG_ID \
+    --location global
     ```
 
 2. Add the security profile to a security profile group (`pan-spg`).
 
     ```
-    gcloud beta network-security security-profile-groups create panw-spg \
+    gcloud network-security security-profile-groups create panw-spg \
         --custom-intercept-profile panw-sp \
         --billing-project $CONSUMER_PROJECT \
         --organization $ORG_ID \
@@ -587,7 +587,7 @@ Create a `custom-intercept` security profile group, configure a network firewall
 4. Within the network firewall policy, create two firewall rules to intercept all `INGRESS` and `EGRESS` traffic by setting the security profile group as the action within each rule.  
    
     ```
-    gcloud beta compute network-firewall-policies rules create 10 \
+    gcloud compute network-firewall-policies rules create 10 \
         --project $CONSUMER_PROJECT \
         --action apply_security_profile_group \
         --firewall-policy consumer-policy \
@@ -598,7 +598,7 @@ Create a `custom-intercept` security profile group, configure a network firewall
         --direction INGRESS  \
         --security-profile-group organizations/$ORG_ID/locations/global/securityProfileGroups/panw-spg
 
-    gcloud beta compute network-firewall-policies rules create 11 \
+    gcloud compute network-firewall-policies rules create 11 \
         --project $CONSUMER_PROJECT \
         --action apply_security_profile_group \
         --firewall-policy consumer-policy \
@@ -751,22 +751,22 @@ Pod-to-pod traffic within a cluster can also be inspected by the firewalls using
         --project=$CONSUMER_PROJECT \
         --global
 
-    gcloud beta network-security security-profile-groups delete panw-spg \
+    gcloud network-security security-profile-groups delete panw-spg \
         --organization $ORG_ID \
         --location=global \
         --quiet
 
-    gcloud beta network-security security-profiles custom-intercept delete panw-sp \
+    gcloud network-security security-profiles custom-intercept delete panw-sp \
         --organization $ORG_ID \
         --location=global \
         --quiet
 
-    gcloud beta network-security intercept-endpoint-group-associations delete panw-epg-assoc \
+    gcloud network-security intercept-endpoint-group-associations delete panw-epg-assoc \
         --project $CONSUMER_PROJECT \
         --location global \
         --no-async
 
-    gcloud beta network-security intercept-endpoint-groups delete panw-epg \
+    gcloud network-security intercept-endpoint-groups delete panw-epg \
         --project $CONSUMER_PROJECT \
         --location global \
         --no-async
@@ -791,7 +791,7 @@ Pod-to-pod traffic within a cluster can also be inspected by the firewalls using
 2. Delete the intercept deployment, forwarding rule, and intercept deployment group.
 
     ```
-    gcloud beta network-security intercept-deployments delete panw-deployment-$ZONE \
+    gcloud network-security intercept-deployments delete panw-deployment-$ZONE \
         --location $ZONE \
         --no-async
     
@@ -800,7 +800,7 @@ Pod-to-pod traffic within a cluster can also be inspected by the firewalls using
         --region $REGION \
         --quiet
 
-    gcloud beta network-security intercept-deployment-groups delete panw-dg \
+    gcloud network-security intercept-deployment-groups delete panw-dg \
         --location global \
         --project $PRODUCER_PROJECT \
         --no-async
