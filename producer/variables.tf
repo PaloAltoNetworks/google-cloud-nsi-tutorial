@@ -45,7 +45,7 @@ variable "subnet_cidr_data" {
 
 variable "image_name" {
   description = "Name of the firewall image within the paloaltonetworksgcp-public project. To list available images, run: `gcloud compute images list --project paloaltonetworksgcp-public --no-standard-images`. If you are using a custom image in a different project, update `local.firewall_image_url` in `main.tf` to match your URL."
-  default     = "vmseries-flex-bundle2-1114"
+  default     = "vmseries-flex-bundle2-1126"
   type        = string
 }
 
