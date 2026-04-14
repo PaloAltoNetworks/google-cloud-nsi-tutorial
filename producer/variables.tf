@@ -8,6 +8,12 @@ variable "region" {
   type        = string
 }
 
+variable "mirroring_deployment" {
+  description = "If true, a mirroring deployment will be created.  If false, an intercept deployment will be created."
+  type        = bool
+  default     = false
+}
+
 variable "public_key_path" {
   description = "Local path to public SSH key. To generate the key pair use `ssh-keygen -t rsa -C admin -N '' -f id_rsa`  If you do not have a public key, run `ssh-keygen -f ~/.ssh/demo-key -t rsa -C admin`"
   type        = string

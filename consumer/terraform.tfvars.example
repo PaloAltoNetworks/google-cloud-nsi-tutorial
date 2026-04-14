@@ -1,3 +1,11 @@
-project_id                 = ""
-mgmt_allow_ips             = ["0.0.0.0/0"]
-region                     = "us-west1"
+# ------------------------------------------------
+# Required
+# ------------------------------------------------
+
+org_id               = ""
+project_id           = ""
+billing_project_id   = ""
+producer_dg          = "" # Format: "projects/PROJECT_ID/locations/global/interceptDeploymentGroups/panw-dg"
+mgmt_allow_ips       = ["0.0.0.0/0"]
+region               = "us-west1"
+mirroring_deployment = false

@@ -4,27 +4,16 @@
 
 terraform {
   required_version = "> 1.5, < 2.0"
+
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = ">=4.64, < 6.18"
-    }
-    google-beta = {
-      source  = "hashicorp/google-beta"
-      version = ">=4.64, < 6.18"
+      version = "~> 7.27.0"
     }
   }
 }
 
 provider "google" {
-  project = var.project_id
-  region  = var.region
-  default_labels = {
-    panw = "true"
-  }
-}
-
-provider "google-beta" {
   project = var.project_id
   region  = var.region
   default_labels = {
@@ -39,6 +28,7 @@ provider "google-beta" {
 
 locals {
   prefix = var.prefix != null && var.prefix != "" ? "${var.prefix}-" : ""
+  zones  = toset(data.google_compute_zones.available.names)
 }
 
 
@@ -177,6 +167,7 @@ module "bootstrap" {
 
   files = {
     "bootstrap_files/init-cfg.txt"                       = "config/init-cfg.txt"
+    "bootstrap_files/bootstrap.xml"                      = "config/bootstrap.xml"
     "bootstrap_files/authcodes"                          = "license/authcodes"
     "bootstrap_files/panup-all-antivirus-5120-5639"      = "content/panup-all-antivirus-5120-5639"
     "bootstrap_files/panupv2-all-contents-8952-9326"     = "content/panupv2-all-contents-8952-9326"
@@ -245,7 +236,6 @@ resource "google_compute_instance_template" "main" {
   ]
 }
 
-
 // Create regional instance group
 resource "google_compute_region_instance_group_manager" "main" {
   name                      = "${local.prefix}panw-mig"
@@ -256,7 +246,6 @@ resource "google_compute_region_instance_group_manager" "main" {
     instance_template = google_compute_instance_template.main.id
   }
 }
-
 
 // Configure autoscaling policy for instance group
 resource "google_compute_region_autoscaler" "main" {
@@ -271,3 +260,65 @@ resource "google_compute_region_autoscaler" "main" {
 }
 
 
+# -------------------------------------------------------------------------------------
+#  Create forwarding rules
+# -------------------------------------------------------------------------------------
+
+// Create a forwarding rule for each zone within var.region 
+resource "google_compute_forwarding_rule" "main" {
+  for_each               = local.zones
+  name                   = "${local.prefix}panw-lb-rule-${each.key}"
+  project                = var.project_id
+  region                 = var.region
+  load_balancing_scheme  = "INTERNAL"
+  ip_protocol            = "UDP"
+  ports                  = ["6081"]
+  backend_service        = google_compute_region_backend_service.main.id
+  subnetwork             = google_compute_subnetwork.data.id
+  network                = google_compute_network.data.id
+  is_mirroring_collector = var.mirroring_deployment ? true : false
+}
+
+
+# -------------------------------------------------------------------------------------
+#  If mirroring_deployment = false, create intercept deployment.
+# -------------------------------------------------------------------------------------
+
+// Create intercept deployment group.
+resource "google_network_security_intercept_deployment_group" "main" {
+  count                         = var.mirroring_deployment ? 0 : 1
+  intercept_deployment_group_id = "${local.prefix}panw-dg"
+  location                      = "global"
+  network                       = google_compute_network.data.id
+}
+
+// Create an intercept deployment for each zone within var.region
+resource "google_network_security_intercept_deployment" "main" {
+  for_each                   = var.mirroring_deployment ? {} : google_compute_forwarding_rule.main
+  intercept_deployment_id    = "panw-deployment-${each.key}"
+  location                   = each.key
+  forwarding_rule            = each.value.id
+  intercept_deployment_group = google_network_security_intercept_deployment_group.main[0].id
+}
+
+
+# -------------------------------------------------------------------------------------
+#  If mirroring_deployment = true, create mirroring deployment instead.
+# -------------------------------------------------------------------------------------
+
+// Create mirroring deployment group.
+resource "google_network_security_mirroring_deployment_group" "main" {
+  count                         = var.mirroring_deployment ? 1 : 0
+  mirroring_deployment_group_id = "${local.prefix}panw-dg"
+  location                      = "global"
+  network                       = google_compute_network.data.id
+}
+
+// Create an mirroring deployment for each zone within var.region
+resource "google_network_security_mirroring_deployment" "main" {
+  for_each                   = var.mirroring_deployment ? google_compute_forwarding_rule.main : {}
+  mirroring_deployment_id    = "panw-deployment-${each.key}"
+  location                   = each.key
+  forwarding_rule            = each.value.id
+  mirroring_deployment_group = google_network_security_mirroring_deployment_group.main[0].id
+}

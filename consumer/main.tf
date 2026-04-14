@@ -7,27 +7,39 @@ terraform {
 
   required_providers {
     google = {
-      source = "hashicorp/google"
+      source  = "hashicorp/google"
+      version = "~> 6.50" # Back to where you were
     }
     google-beta = {
-      source = "hashicorp/google-beta"
+      source  = "hashicorp/google-beta"
+      version = "~> 6.50" # Add the beta provider at the same version
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.38"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.8"
     }
   }
 }
 
 provider "google" {
-  project = var.project_id
-  region  = var.region
-
+  project               = var.project_id
+  region                = var.region
+  billing_project       = var.billing_project_id
+  user_project_override = true
   default_labels = {
     panw = "true"
   }
 }
 
 provider "google-beta" {
-  project = var.project_id
-  region  = var.region
-
+  project               = var.project_id
+  region                = var.region
+  billing_project       = var.billing_project_id
+  user_project_override = true
   default_labels = {
     panw = "true"
   }
@@ -129,7 +141,7 @@ resource "google_compute_instance" "client" {
   zone                      = data.google_compute_zones.available.names[0]
   can_ip_forward            = false
   allow_stopping_for_update = true
-  tags             = ["client-vm"]
+  tags                      = ["client-vm"]
   boot_disk {
     initialize_params {
       image = "ubuntu-os-cloud/ubuntu-2204-lts"
@@ -216,8 +228,8 @@ resource "google_compute_instance" "web" {
 # -------------------------------------------------------------------------------------
 
 module "gke" {
-  source = "terraform-google-modules/kubernetes-engine/google"
-  version                    = "36.1.0"
+  source                      = "terraform-google-modules/kubernetes-engine/google"
+  version                     = "36.1.0"
   project_id                  = var.project_id
   name                        = "${local.prefix}cluster1"
   regional                    = false
@@ -255,4 +267,191 @@ module "gke" {
 data "google_container_cluster" "main" {
   name     = module.gke.name
   location = data.google_compute_zones.available.names[0]
+}
+
+
+# -------------------------------------------------------------------------------------
+#  If mirroring_deployment = false, create intercept deployment.
+# -------------------------------------------------------------------------------------
+
+// Create intercept endpoint group
+resource "google_network_security_intercept_endpoint_group" "main" {
+  count                       = var.mirroring_deployment ? 0 : 1
+  intercept_endpoint_group_id = "${local.prefix}panw-epg"
+  location                    = "global"
+  intercept_deployment_group  = var.producer_dg
+}
+
+// Create intercept endpoint association
+resource "google_network_security_intercept_endpoint_group_association" "main" {
+  count                                   = var.mirroring_deployment ? 0 : 1
+  intercept_endpoint_group_association_id = "${local.prefix}panw-epg-assoc"
+  location                                = "global"
+  network                                 = google_compute_network.main.id
+  intercept_endpoint_group                = google_network_security_intercept_endpoint_group.main[0].id
+}
+
+
+# -------------------------------------------------------------------------------------
+#  If mirroring_deployment = true, create mirroring deployment.
+# -------------------------------------------------------------------------------------
+
+// Create mirroring endpoint group
+resource "google_network_security_mirroring_endpoint_group" "main" {
+  count                       = var.mirroring_deployment ? 1 : 0
+  mirroring_endpoint_group_id = "${local.prefix}panw-epg"
+  location                    = "global"
+  mirroring_deployment_group  = var.producer_dg
+}
+
+// Create intercept endpoint association
+resource "google_network_security_mirroring_endpoint_group_association" "main" {
+  count                                   = var.mirroring_deployment ? 1 : 0
+  mirroring_endpoint_group_association_id = "${local.prefix}panw-epg-assoc"
+  location                                = "global"
+  network                                 = google_compute_network.main.id
+  mirroring_endpoint_group                = google_network_security_mirroring_endpoint_group.main[0].id
+}
+
+
+# -------------------------------------------------------------------------------------
+# Create firewall policy and rules to intercept or mirror traffic for the consumer VPC.
+# -------------------------------------------------------------------------------------
+
+// Create the Custom Security Profile
+resource "google_network_security_security_profile" "main" {
+  name     = "${local.prefix}panw-sp"
+  parent   = "organizations/${var.org_id}"
+  location = "global"
+  type     = var.mirroring_deployment ? "CUSTOM_MIRRORING" : "CUSTOM_INTERCEPT"
+
+  dynamic "custom_intercept_profile" {
+    for_each = var.mirroring_deployment ? [] : [1]
+    content {
+      intercept_endpoint_group = google_network_security_intercept_endpoint_group.main[0].id
+    }
+  }
+
+  dynamic "custom_mirroring_profile" {
+    for_each = var.mirroring_deployment ? [1] : []
+    content {
+      mirroring_endpoint_group = google_network_security_mirroring_endpoint_group.main[0].id
+    }
+  }
+}
+
+// Create the Security Profile Group
+resource "google_network_security_security_profile_group" "main" {
+  name                     = "${local.prefix}panw-spg"
+  parent                   = "organizations/${var.org_id}"
+  location                 = "global"
+  custom_intercept_profile = var.mirroring_deployment ? null : google_network_security_security_profile.main.id
+  custom_mirroring_profile = var.mirroring_deployment ? google_network_security_security_profile.main.id : null
+}
+
+// Create the Global Network Firewall Policy (Common to both deployments)
+resource "google_compute_network_firewall_policy" "main" {
+  name    = "${local.prefix}consumer-policy"
+  project = var.project_id
+}
+
+
+# -------------------------------------------------------------------------------------
+# PATH A: Intercept Rules (Created only if mirroring_deployment = false)
+# -------------------------------------------------------------------------------------
+
+// Create a firewall rule to intercept all ingress traffic for inspection.
+resource "google_compute_network_firewall_policy_rule" "ingress" {
+  count                  = var.mirroring_deployment ? 0 : 1
+  project                = var.project_id
+  priority               = 10
+  direction              = "INGRESS"
+  action                 = "apply_security_profile_group"
+  firewall_policy        = google_compute_network_firewall_policy.main.name
+  security_profile_group = google_network_security_security_profile_group.main.id
+
+  match {
+    src_ip_ranges  = ["0.0.0.0/0"]
+    dest_ip_ranges = ["0.0.0.0/0"]
+    layer4_configs {
+      ip_protocol = "all"
+    }
+  }
+}
+
+// Create a firewall rule to intercept all egress traffic for inspection.
+resource "google_compute_network_firewall_policy_rule" "egress" {
+  count                  = var.mirroring_deployment ? 0 : 1
+  project                = var.project_id
+  priority               = 11
+  direction              = "EGRESS"
+  action                 = "apply_security_profile_group"
+  firewall_policy        = google_compute_network_firewall_policy.main.name
+  security_profile_group = google_network_security_security_profile_group.main.id
+
+  match {
+    src_ip_ranges  = ["0.0.0.0/0"]
+    dest_ip_ranges = ["0.0.0.0/0"]
+    layer4_configs {
+      ip_protocol = "all"
+    }
+  }
+}
+
+
+# -------------------------------------------------------------------------------------
+# PATH B: Mirroring Rules (Created only if mirroring_deployment = true)
+# -------------------------------------------------------------------------------------
+
+// Create a mirroring rule for ingress traffic.
+resource "google_compute_network_firewall_policy_packet_mirroring_rule" "ingress" {
+  provider               = google-beta
+  count                  = var.mirroring_deployment ? 1 : 0
+  project                = var.project_id
+  priority               = 10
+  direction              = "INGRESS"
+  action                 = "mirror"
+  firewall_policy        = google_compute_network_firewall_policy.main.name
+  security_profile_group = "//networksecurity.googleapis.com/${google_network_security_security_profile_group.main.id}"
+
+  match {
+    src_ip_ranges  = ["0.0.0.0/0"]
+    dest_ip_ranges = ["0.0.0.0/0"]
+    layer4_configs {
+      ip_protocol = "all"
+    }
+  }
+}
+
+// Create a mirroring rule for egress traffic.
+resource "google_compute_network_firewall_policy_packet_mirroring_rule" "egress" {
+  provider               = google-beta
+  count                  = var.mirroring_deployment ? 1 : 0
+  project                = var.project_id
+  priority               = 11
+  direction              = "EGRESS"
+  action                 = "mirror"
+  firewall_policy        = google_compute_network_firewall_policy.main.name
+  security_profile_group = "//networksecurity.googleapis.com/${google_network_security_security_profile_group.main.id}"
+
+  match {
+    src_ip_ranges  = ["0.0.0.0/0"]
+    dest_ip_ranges = ["0.0.0.0/0"]
+    layer4_configs {
+      ip_protocol = "all"
+    }
+  }
+}
+
+
+# -------------------------------------------------------------------------------------
+# Firewall Policy Association
+# -------------------------------------------------------------------------------------
+
+// Associate the firewall policy with the consumer VPC network (Common to both deployments)
+resource "google_compute_network_firewall_policy_association" "main" {
+  name              = "${local.prefix}consumer-policy-assoc"
+  project           = var.project_id
+  firewall_policy   = google_compute_network_firewall_policy.main.id
+  attachment_target = google_compute_network.main.id
 }

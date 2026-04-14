@@ -2,11 +2,12 @@
 # Required
 # ------------------------------------------------
 
-project_id      = ""
-mgmt_allow_ips  = ["0.0.0.0/0"]
-mgmt_public_ip  = true
-region          = "us-west1"
-image_name      = "vmseries-flex-bundle2-1126"
+project_id           = ""
+mgmt_allow_ips       = ["0.0.0.0/0"]
+mgmt_public_ip       = true
+region               = "us-west1"
+image_name           = "vmseries-flex-bundle2-1126"
+mirroring_deployment = false
 
 # ------------------------------------------------
 # Optional
