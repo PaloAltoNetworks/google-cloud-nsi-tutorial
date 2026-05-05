@@ -173,14 +173,28 @@ The Terraform plan in the producer directory creates the producer's VPCs, instan
 > [!NOTE]  
 > This Terraform deployment automatically bootstraps the firewalls with a baseline configuration. To bypass bootstrapping and configure the firewalls manually for NSI, see the [PAN-OS Configuration Guide](/docs/panos_config.md).
 
-1. In [Cloud Shell](https://shell.cloud.google.com), clone the repository, navigate to the `producer` directory, and create your variables file.
+1. In [Cloud Shell](https://shell.cloud.google.com) install Git LFS if it isn't already present.
+
+    ```bash
+    sudo apt-get install -y git-lfs
+    git lfs install
     ```
+
+2.  Clone the repository and navigate to the `producer` directory.
+
+    ```bash
     git clone https://github.com/PaloAltoNetworks/google-cloud-nsi-tutorial
     cd google-cloud-nsi-tutorial/producer
+    git lfs pull
+    ```
+
+3. Create a `terraform.tfvars` file. 
+
+    ```bash
     cp terraform.tfvars.example terraform.tfvars
     ```
 
-2. Edit `terraform.tfvars` by setting values for the following variables:  
+4. Edit `terraform.tfvars` by setting values for the following variables:  
 
     | Key | Value | Default |
     | :---- | :---- | :---- |
@@ -191,29 +205,28 @@ The Terraform plan in the producer directory creates the producer's VPCs, instan
     | `image_name` | The firewall image to deploy. | `vmseries-flex-bundle2-1126`|
     | `mirror_deployment` | If `true` a mirroring deployment is created instead of an intercept deployment. | `false` |
 
-    > Always set `mgmt_public_ip = false` in production to prevent exposing the management interface to the public internet.
+    > Always set `mgmt_public_ip = false` in production to prevent exposing the MGT NIC to the internet.
     
     > If using a BYOL image (`vmseries-flex-byol-*`), add your authcode to `bootstrap_files/authcodes` before deploying. See [Bootstrap Methods](https://docs.paloaltonetworks.com/vm-series/11-1/vm-series-deployment/bootstrap-the-vm-series-firewall) for details.
 
 
-3. Initialize and apply the terraform plan.
+5. Initialize and apply the terraform plan.
 
-    ```
+    ```bash
     terraform init
     terraform apply
     ```
 
     Enter `yes` to apply the plan.
 
-4. After the apply completes, terraform displays the following message:
+6. After the apply completes, terraform displays the following message:
 
     <pre>
     Apply complete! Resources: 41 added, 0 changed, 0 destroyed.
 
     Outputs:
 
-    DEPLOYMENT_GROUP = <b>"projects/your-project-id/locations/global/interceptDeploymentGroups/panw-dg"</b>
-    </pre>
+    DEPLOYMENT_GROUP = <b>"projects/your-project-id/locations/global/interceptDeploymentGroups/panw-dg"</b></pre>
 
 > [!IMPORTANT]
 > Record the **`DEPLOYMENT_GROUP`** output value.
@@ -306,7 +319,7 @@ The Terraform plan in the producer directory creates the producer's VPCs, instan
     ]</pre>
 
 > [!NOTE]
-> This Terraform plan creates a **Cross-Zone** deployment to inspect traffic across the entire region. Consequently, it provisions a forwarding rule for every zone within that region.
+> This terraform plan creates a **Cross-Zone** deployment to inspect traffic across the entire region. Consequently, it provisions a forwarding rule for every zone within that region.
 
 ---
 

@@ -94,7 +94,7 @@ resource "google_compute_firewall" "data" {
 
 // Create cloud router for cloud NAT.
 resource "google_compute_router" "main" {
-  name    = "${local.prefix}${var.region}mgmt-router"
+  name    = "${local.prefix}${var.region}-mgmt-router"
   network = google_compute_network.mgmt.id
   region  = var.region
 }
