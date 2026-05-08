@@ -166,12 +166,12 @@ module "bootstrap" {
   service_account = google_service_account.main.email
 
   files = {
-    "bootstrap_files/init-cfg.txt"                       = "config/init-cfg.txt"
-    "bootstrap_files/bootstrap.xml"                      = "config/bootstrap.xml"
-    "bootstrap_files/authcodes"                          = "license/authcodes"
-    "bootstrap_files/panup-all-antivirus-5120-5639"      = "content/panup-all-antivirus-5120-5639"
-    "bootstrap_files/panupv2-all-contents-8952-9326"     = "content/panupv2-all-contents-8952-9326"
-    "bootstrap_files/panupv3-all-wildfire-959874-963830" = "content/panupv3-all-wildfire-959874-963830"
+    "bootstrap_files/init-cfg.txt"                         = "config/init-cfg.txt"
+    "bootstrap_files/bootstrap.xml"                        = "config/bootstrap.xml"
+    "bootstrap_files/authcodes"                            = "license/authcodes"
+    "bootstrap_files/panup-all-antivirus-5543-6070"        = "content/panup-all-antivirus-5543-6070"
+    "bootstrap_files/panupv2-all-contents-9096-10018"      = "content/panupv2-all-contents-9096-10018"
+    "bootstrap_files/panupv3-all-wildfire-1080339-1084680" = "content/panupv3-all-wildfire-1080339-1084680"
   }
 }
 

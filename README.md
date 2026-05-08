@@ -203,7 +203,7 @@ The Terraform plan in the producer directory creates the producer's VPCs, instan
     | `mgmt_public_ip` | If true, the management address will have a public IP assigned to it. | `true` | 
     | `region` | The region to deploy the consumer resources. | `us-west1` |
     | `image_name` | The firewall image to deploy. | `vmseries-flex-bundle2-1126`|
-    | `mirror_deployment` | If `true` a mirroring deployment is created instead of an intercept deployment. | `false` |
+    | `mirroring_deployment` | If `true` a mirroring deployment is created instead of an intercept deployment. | `false` |
 
     > Always set `mgmt_public_ip = false` in production to prevent exposing the MGT NIC to the internet.
     
@@ -480,8 +480,11 @@ Test East-West (Pod-to-Pod) traffic within `cluster1`.
 
     (output)
 
-    <pre><b>HTTP Code: 000
-    command terminated with exit code 2</b></pre>
+    <pre>Sending Log4Shell payload...
+    HTTP Code: 000
+    command terminated with exit code 28
+    Sending Directory Traversal payload...
+    HTTP Code: 404</pre>
 
     > The `time out` response indicates the producer blocked the connection. 
     > If using mirroring, the traffic will be allowed.
